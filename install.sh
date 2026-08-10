@@ -47,7 +47,11 @@ trap cleanup EXIT
 echo "install.sh: fetching ${REPO}@${REF}"
 fetch "${TARBALL_URL}" | tar -xz -C "$tmpdir" || die "download/extract failed (tag ${REF} exists on github.com/${REPO}?)"
 
-script="${tmpdir}/${REPO#*/}-${REF}/vps-hardening.sh"
+# GitHub names the top dir "<repo>-<ref-without-leading-v>" for tags and
+# "<repo>-<ref>" for branches — resolve it from the tarball instead of
+# reimplementing that mapping.
+topdir=$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -1)
+script="${topdir}/vps-hardening.sh"
 [[ -f ${script} ]] || die "vps-hardening.sh missing in tarball (repo layout changed?)"
 
 # exec so the hardening script owns the tty for its interactive verify gate.
