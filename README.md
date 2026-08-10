@@ -152,3 +152,6 @@ bash tests/test-static.sh       # bash -n + shellcheck + static safety guards
 bash tests/test-container.sh    # full matrix (needs docker, ~minutes)
 bash tests/test-container.sh ubuntu-24.04 2222   # single target
 ```
+
+Releasing a new version: see [docs/release-guide.md](docs/release-guide.md)
+(tagging rules, checklist, E2E verification of the published one-liner).
