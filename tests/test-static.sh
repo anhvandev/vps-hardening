@@ -11,18 +11,18 @@ fail=0
 say() { printf '[static] %s\n' "$*"; }
 
 # 1) bash -n on every script.
-for f in vps-hardening.sh lib/*.sh tests/*.sh; do
+for f in vps-hardening.sh install.sh lib/*.sh tests/*.sh; do
   bash -n "$f" && say "bash -n OK: $f" || { say "SYNTAX FAIL: $f"; fail=1; }
 done
 
 # 2) shellcheck (local binary preferred; fall back to docker image).
 if [[ $SKIP_SHELLCHECK == 0 ]]; then
   if command -v shellcheck &>/dev/null; then
-    shellcheck -S warning vps-hardening.sh lib/*.sh tests/*.sh \
+    shellcheck -S warning vps-hardening.sh install.sh lib/*.sh tests/*.sh \
       && say "shellcheck clean" || { say "shellcheck FAIL"; fail=1; }
   elif command -v docker &>/dev/null; then
     docker run --rm -v "$PWD:/mnt" koalaman/shellcheck:stable \
-      -S warning vps-hardening.sh lib/*.sh tests/*.sh \
+      -S warning vps-hardening.sh install.sh lib/*.sh tests/*.sh \
       && say "shellcheck clean (docker)" || { say "shellcheck FAIL"; fail=1; }
   else
     say "shellcheck unavailable — SKIPPED"

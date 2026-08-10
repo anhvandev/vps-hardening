@@ -30,9 +30,60 @@ out.
 - **systemd as PID 1** (OpenVZ/LXC-style containers are unsupported — the
   script dies early with a clear message)
 
-## Usage
+## Quick start (one command, straight from GitHub)
+
+On the fresh VPS, as root:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/anhvandev/vps-hardening/v1.0.0/install.sh \
+  | sudo bash -s -- --user myname
+```
+
+Every flag after `--` is forwarded verbatim to `vps-hardening.sh`:
+
+```bash
+# move SSH to 2222 as well
+curl -fsSL https://raw.githubusercontent.com/anhvandev/vps-hardening/v1.0.0/install.sh \
+  | sudo bash -s -- --user myname --port 2222
+
+# full automation (no interactive verify gate — machine assertions still run)
+curl -fsSL https://raw.githubusercontent.com/anhvandev/vps-hardening/v1.0.0/install.sh \
+  | sudo bash -s -- --user myname --yes --key-out /root/mykey
+
+# rotate a lost key
+curl -fsSL https://raw.githubusercontent.com/anhvandev/vps-hardening/v1.0.0/install.sh \
+  | sudo bash -s -- --user myname --rotate-key
+```
+
+How it works: `install.sh` is a thin bootstrap. It downloads the release
+tarball for the tag in its URL (`v1.0.0` above), extracts it to a temp dir,
+and `exec`s `vps-hardening.sh` with your arguments — so `lib/` is present and
+the interactive verify gate keeps working normally. Nothing is installed
+system-wide; the temp dir is removed on exit.
+
+**Always pin a tag in the URL.** Never point the one-liner at `main` — this
+script rewrites sshd and firewall rules, and running unreleased code on a
+production VPS is how lockouts happen.
+
+Requirements on the VPS: root shell, `curl` (or `wget`), `tar`, and systemd as
+PID 1 — all present on mainstream cloud images.
+
+Advanced overrides (environment variables):
+
+```bash
+# fetch a different tag/branch (branches also work, e.g. a hotfix branch)
+curl -fsSL .../v1.0.0/install.sh | sudo VPS_HARDENING_REF=v1.1.0 bash -s -- --user myname
+
+# use a fork
+curl -fsSL .../install.sh | sudo VPS_HARDENING_REPO=you/vps-hardening bash -s -- --user myname
+```
+
+## Usage (from a local checkout)
+
+```bash
+git clone --depth 1 --branch v1.0.0 https://github.com/anhvandev/vps-hardening.git
+cd vps-hardening
+
 bash vps-hardening.sh --user myname                    # interactive, recommended
 bash vps-hardening.sh --user myname --port 2222        # also move SSH to 2222
 bash vps-hardening.sh --user myname --yes --key-out /root/mykey   # automation
