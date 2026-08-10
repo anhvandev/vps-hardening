@@ -1,0 +1,6 @@
+# systemd container for vps-hardening tests. Rocky 9: wheel + firewalld.
+FROM rockylinux:9
+RUN dnf install -y systemd openssh-server openssh-clients sudo iproute && \
+    dnf clean all
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

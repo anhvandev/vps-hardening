@@ -1,0 +1,14 @@
+# systemd container for vps-hardening tests. Ubuntu 24.04: force SOCKET mode.
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && \
+    apt-get install -y -qq systemd systemd-sysv openssh-server sudo iproute2 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /etc/ssh/sshd_config.d && \
+    printf 'PasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/50-cloud-init.conf
+# Force socket activation so the socket code path is actually exercised
+# (image defaults vary; pre-state assert in test-container.sh enforces this).
+RUN systemctl disable ssh.service 2>/dev/null || true && \
+    systemctl enable ssh.socket
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

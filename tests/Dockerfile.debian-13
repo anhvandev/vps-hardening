@@ -1,0 +1,12 @@
+# systemd container for vps-hardening tests. Debian 13: force SOCKET mode.
+FROM debian:13
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && \
+    apt-get install -y -qq systemd systemd-sysv openssh-server sudo iproute2 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /etc/ssh/sshd_config.d && \
+    printf 'PasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/50-cloud-init.conf
+RUN systemctl disable ssh.service 2>/dev/null || true && \
+    systemctl enable ssh.socket
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

@@ -1,0 +1,11 @@
+# systemd container for vps-hardening tests. Ubuntu 22.04: service activation.
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && \
+    apt-get install -y -qq systemd systemd-sysv openssh-server sudo iproute2 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+# Simulate a provider cloud-init drop-in that fights our hardening.
+RUN mkdir -p /etc/ssh/sshd_config.d && \
+    printf 'PasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/50-cloud-init.conf
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

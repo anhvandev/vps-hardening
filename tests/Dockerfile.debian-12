@@ -1,0 +1,10 @@
+# systemd container for vps-hardening tests. Debian 12: service activation.
+FROM debian:12
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && \
+    apt-get install -y -qq systemd systemd-sysv openssh-server sudo iproute2 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /etc/ssh/sshd_config.d && \
+    printf 'PasswordAuthentication yes\n' > /etc/ssh/sshd_config.d/50-cloud-init.conf
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
