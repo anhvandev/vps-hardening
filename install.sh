@@ -40,19 +40,29 @@ command -v tar &>/dev/null || die "tar not found"
 # Root is required — the hardening script will enforce it too, but fail early.
 [[ ${EUID} -eq 0 ]] || die "must run as root (use: ... | sudo bash -s -- --user NAME)"
 
-tmpdir=$(mktemp -d /tmp/vps-hardening.XXXXXX)
-cleanup() { rm -rf "$tmpdir"; }
-trap cleanup EXIT
+# Extract into a stable system location, not a mktemp dir: vps-hardening.sh
+# redirects its output through a tee subprocess whose lifetime outlasts our
+# shell, and rm-ing a temp dir under a live tee races and leaks the dir.
+# A stable dir is also useful afterwards (e.g. re-run --rotate-key).
+prefix=/opt/vps-hardening
+rm -rf "${prefix}.new" && mkdir -p "${prefix}.new"
 
 echo "install.sh: fetching ${REPO}@${REF}"
-fetch "${TARBALL_URL}" | tar -xz -C "$tmpdir" || die "download/extract failed (tag ${REF} exists on github.com/${REPO}?)"
+fetch "${TARBALL_URL}" | tar -xz -C "${prefix}.new" || die "download/extract failed (tag ${REF} exists on github.com/${REPO}?)"
 
 # GitHub names the top dir "<repo>-<ref-without-leading-v>" for tags and
 # "<repo>-<ref>" for branches — resolve it from the tarball instead of
 # reimplementing that mapping.
-topdir=$(find "$tmpdir" -mindepth 1 -maxdepth 1 -type d | head -1)
+topdir=$(find "${prefix}.new" -mindepth 1 -maxdepth 1 -type d | head -1)
 script="${topdir}/vps-hardening.sh"
 [[ -f ${script} ]] || die "vps-hardening.sh missing in tarball (repo layout changed?)"
+
+# Swap atomically-ish: keep the old tree until the new one is complete.
+rm -rf "${prefix}.old"
+[[ -d ${prefix} ]] && mv "$prefix" "${prefix}.old"
+mv "$topdir" "$prefix"
+rm -rf "${prefix}.new" "${prefix}.old"
+script="${prefix}/vps-hardening.sh"
 
 # exec so the hardening script owns the tty for its interactive verify gate.
 echo "install.sh: handing off to vps-hardening.sh $*"

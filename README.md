@@ -56,10 +56,11 @@ curl -fsSL https://raw.githubusercontent.com/anhvandev/vps-hardening/v1.0.0/inst
 ```
 
 How it works: `install.sh` is a thin bootstrap. It downloads the release
-tarball for the tag in its URL (`v1.0.0` above), extracts it to a temp dir,
-and `exec`s `vps-hardening.sh` with your arguments — so `lib/` is present and
-the interactive verify gate keeps working normally. Nothing is installed
-system-wide; the temp dir is removed on exit.
+tarball for the tag in its URL (`v1.0.0` above), extracts it to
+`/opt/vps-hardening/`, and `exec`s `vps-hardening.sh` with your arguments —
+so `lib/` is present and the interactive verify gate keeps working normally.
+The copy in `/opt/vps-hardening/` stays behind, handy for a later
+`bash /opt/vps-hardening/vps-hardening.sh --user myname --rotate-key`.
 
 **Always pin a tag in the URL.** Never point the one-liner at `main` — this
 script rewrites sshd and firewall rules, and running unreleased code on a
