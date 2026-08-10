@@ -179,6 +179,36 @@ for entry in "${MATRIX[@]}"; do
     fi
   fi
 
+  # Regression: explicit `Port 22` in sshd_config (some provider images ship
+  # one) made `sshd -T` report multiple Port directives and the run died in
+  # validate_sshd. The script must neutralize it and still land on the
+  # effective port. Fresh container so the main run above is undisturbed.
+  dctr=vh-dirty-$name-$$
+  docker rm -f "$dctr" >/dev/null 2>&1
+  docker run -d --name "$dctr" --privileged --cgroupns=host \
+    -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+    -v "$PWD:/src:ro" "$image" >/dev/null
+  y() { docker exec "$dctr" bash -c "$*"; }
+  for _try in $(seq 1 30); do
+    y 'systemctl is-system-running 2>/dev/null | grep -qE "running|degraded"' && break
+    sleep 1
+  done
+  y 'printf "\nPort 22\n" >> /etc/ssh/sshd_config'
+  DPORT=${port:-5890}   # dirty run uses a custom port on default-port targets
+  y "cd /src && bash vps-hardening.sh --user dirtyop --yes --key-out /root/k2 --port $DPORT" \
+    > "/tmp/vh-$name-dirty.log" 2>&1
+  rc=$?
+  [[ $rc == 0 ]] && ok "dirty-config run exit 0" || bad "dirty-config run exit $rc (see /tmp/vh-$name-dirty.log)"
+  if [[ $rc == 0 ]]; then
+    y 'grep -qE "^# vps-hardening: disabled" /etc/ssh/sshd_config' \
+      && ok "ssh_config Port neutralized (commented)" || bad "ssh_config Port not neutralized"
+    y "test \$(sshd -T | grep -c '^port ') -eq 1 && sshd -T | grep -qx 'port $DPORT'" \
+      && ok "sshd -T exactly one port $DPORT" || bad "sshd -T port count wrong after fix"
+    y "ssh -i /root/k2 -p $DPORT -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 dirtyop@localhost true" \
+      && ok "dirty run key login works on $DPORT" || bad "dirty run key login FAILED"
+  fi
+  docker rm -f "$dctr" >/dev/null 2>&1
+
   docker rm -f "$ctr" >/dev/null 2>&1
   docker ps -a --format '{{.Names}}' | grep -q "^$ctr\$" && bad "container orphan: $ctr"
   log "=== $name done ==="

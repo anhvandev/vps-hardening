@@ -64,6 +64,14 @@ snapshot_state() {
     cp -a "$SSH_SOCKET_DROPIN" "$snap/socket-dropin"
   fi
   effective_port > "$snap/old-port"
+  # Main config + every foreign drop-in: neutralize_foreign_ports edits these
+  # in place, and rollback must restore the operator's original files.
+  [[ -f /etc/ssh/sshd_config ]] && cp -a /etc/ssh/sshd_config "$snap/sshd_config"
+  local foreign=("$SSH_DROPIN_DIR"/*.conf)
+  if [[ -e ${foreign[0]} ]]; then
+    tar -C "$SSH_DROPIN_DIR" -czf "$snap/foreign-dropins.tgz" \
+      --exclude='00-hardening.conf' . 2>/dev/null || true
+  fi
   if command -v ufw &>/dev/null; then
     ufw status 2>/dev/null > "$snap/ufw-status" || true
   fi
@@ -88,6 +96,13 @@ rollback_state() {
     rm -f "$SSH_SOCKET_DROPIN" || true
   fi
   systemctl daemon-reload 2>/dev/null || true
+  if [[ -f $snap/sshd_config ]]; then
+    cp -a "$snap/sshd_config" /etc/ssh/sshd_config || warn "failed to restore sshd_config"
+  fi
+  if [[ -f $snap/foreign-dropins.tgz ]]; then
+    tar -C "$SSH_DROPIN_DIR" -xzf "$snap/foreign-dropins.tgz" 2>/dev/null \
+      || warn "failed to restore foreign drop-ins"
+  fi
   if [[ $SOCKET_MODE == true ]]; then
     systemctl restart "$SSH_SOCKET_UNIT" 2>/dev/null \
       || systemctl restart "$SSH_UNIT" 2>/dev/null \
@@ -159,6 +174,37 @@ write_dropin() {
   cat "$tmp" > "$SSH_DROPIN" || { rm -f "$tmp"; die "failed to write $SSH_DROPIN"; }
   rm -f "$tmp"
   info "wrote $SSH_DROPIN (stage $stage, port $port)"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Foreign Port neutralization
+# ---------------------------------------------------------------------------
+
+# neutralize_foreign_ports — an explicit `Port` in sshd_config (or a drop-in
+# loading after 00-*) makes `sshd -T` report multiple Port directives, which
+# this script refuses to manage. Our 00- drop-in wins on first-match anyway,
+# so comment the competing lines out (reversible by hand). Main config is
+# snapshotted before this runs; foreign drop-ins are tarred as a set.
+neutralize_foreign_ports() {
+  local cfg=/etc/ssh/sshd_config changed=0
+  if [[ -f $cfg ]] && grep -qE '^[[:space:]]*Port[[:space:]]' "$cfg"; then
+    sed -i 's/^\([[:space:]]*Port[[:space:]].*\)$/# vps-hardening: disabled (managed in 00-hardening.conf) \1/' \
+      "$cfg" || die "failed to neutralize Port in $cfg"
+    warn "commented out explicit Port in $cfg (now managed via 00-hardening.conf)"
+    changed=1
+  fi
+  local f
+  for f in "$SSH_DROPIN_DIR"/*.conf; do
+    [[ -f $f && $f != "$SSH_DROPIN" ]] || continue
+    if grep -qE '^[[:space:]]*Port[[:space:]]' "$f"; then
+      sed -i 's/^\([[:space:]]*Port[[:space:]].*\)$/# vps-hardening: disabled (managed in 00-hardening.conf) \1/' \
+        "$f" || die "failed to neutralize Port in $f"
+      warn "commented out Port in foreign drop-in $f"
+      changed=1
+    fi
+  done
+  [[ $changed == 1 ]] && info "foreign Port directives neutralized"
   return 0
 }
 

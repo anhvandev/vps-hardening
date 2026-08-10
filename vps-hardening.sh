@@ -182,6 +182,7 @@ else
 fi
 
 assert_include_directive
+neutralize_foreign_ports
 A_CHANGED=0
 if [[ $SKIP_GATE == 0 ]]; then
   if write_dropin A "$EFFECTIVE_PORT"; then
