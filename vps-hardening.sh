@@ -126,8 +126,11 @@ pre_lock_assertions() {
   [[ -s $authkeys ]] || die "pre-lock assertion failed: $authkeys missing/empty"
   [[ $(stat -c '%a %U' "$authkeys") == "600 $name" ]] \
     || die "pre-lock assertion failed: bad perms on $authkeys"
-  sudo -l -U "$name" 2>/dev/null | grep -q 'ALL' \
-    || die "pre-lock assertion failed: $name has no sudo privileges"
+  # Prove sudo actually escalates for the user — `sudo -l -U` runs as root and
+  # passes even when the user would be stuck at a password prompt (the user is
+  # passwordless, so that would mean locked out of root entirely).
+  sudo -u "$name" sudo -n true 2>/dev/null \
+    || die "pre-lock assertion failed: $name cannot sudo without a password"
   su - "$name" -c true \
     || die "pre-lock assertion failed: cannot su to $name"
   info "pre-lock assertions passed for '$name'"

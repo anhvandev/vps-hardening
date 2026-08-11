@@ -41,6 +41,38 @@ provision_wheel_sudoers() {
   fi
 }
 
+# write_sudoers_nopasswd NAME — the admin user is created passwordless
+# (--disabled-password / locked), so password-prompting sudo would lock the
+# operator out of privilege escalation entirely. Grant per-user NOPASSWD
+# instead; group rules are left untouched. Validated with visudo before
+# landing in sudoers.d.
+#
+# Filename must sort AFTER 90-wheel (provision_wheel_sudoers): sudoers.d is
+# parsed in lexical order and the LAST match wins, so a later password-
+# required %wheel rule would override this NOPASSWD grant (openSUSE/Arch,
+# whose default sudoers has %wheel commented out).
+write_sudoers_nopasswd() {
+  local name=$1 file=/etc/sudoers.d/95-vps-hardening-$1 tmp
+  local rule="$name ALL=(ALL:ALL) NOPASSWD: ALL"
+  # Content-based idempotency: a partial file from an interrupted run must be
+  # repaired, not skipped.
+  if [[ -f $file ]] && grep -qxF "$rule" "$file"; then
+    info "sudoers NOPASSWD already present for '$name'"
+    return 0
+  fi
+  # Stage in the same directory as the destination so the final mv is atomic
+  # (a mid-write failure must never leave a half-written sudoers fragment).
+  tmp=$(mktemp /etc/sudoers.d/.95-vps-hardening.XXXXXX) || die "mktemp failed"
+  printf '# Managed by vps-hardening.sh — %s is a key-only (passwordless) admin;\n# password sudo would be unusable. Delete this file to revoke.\n%s\n' \
+    "$name" "$rule" > "$tmp"
+  chmod 440 "$tmp"
+  if command -v visudo &>/dev/null; then
+    visudo -cf "$tmp" &>/dev/null || { rm -f "$tmp"; die "visudo -c failed for $file content"; }
+  fi
+  mv "$tmp" "$file" || { rm -f "$tmp"; die "failed to install $file"; }
+  info "sudo NOPASSWD granted to '$name' via $file"
+}
+
 # create_admin_user NAME — idempotent; adduser on debian, useradd elsewhere.
 create_admin_user() {
   local name=$1
@@ -57,6 +89,7 @@ create_admin_user() {
   fi
   usermod -aG "$ADMIN_GROUP" "$name" || die "failed to add '$name' to $ADMIN_GROUP"
   provision_wheel_sudoers
+  write_sudoers_nopasswd "$name"
 }
 
 # _install_pubkey NAME PUBKEY_FILE — idempotent authorized_keys install.

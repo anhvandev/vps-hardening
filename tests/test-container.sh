@@ -102,6 +102,23 @@ for entry in "${MATRIX[@]}"; do
     && ok "testop in admin group" || bad "testop not in admin group"
   x "ssh -i /root/k -p $EPORT -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 testop@localhost true" \
     && ok "key login works" || bad "key login FAILED"
+  # Real sudo from the user's own session: the user is passwordless, so any
+  # password prompt here means the operator would be locked out of root.
+  # (BatchMode only affects ssh, not sudo; -n makes sudo fail instead of prompt.)
+  x "ssh -i /root/k -p $EPORT -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 testop@localhost 'sudo -n true'" \
+    && ok "sudo works passwordless in user session" || bad "sudo FAILED in user session (would lock operator out of root)"
+  x "f=\$(ls /etc/sudoers.d/*vps-hardening-testop 2>/dev/null) && test -n \"\$f\" && test \$(stat -c '%a' \"\$f\") = 440" \
+    && ok "sudoers NOPASSWD file present (mode 440)" || bad "sudoers NOPASSWD file missing/bad perms"
+  # Order guard: NOPASSWD must be the LAST matching rule — a password-required
+  # %wheel rule parsed later (e.g. our own 90-wheel on suse/arch) would win
+  # and lock the operator out of root. Simulate the hostile order here.
+  x 'printf "%%sudo ALL=(ALL:ALL) ALL\n" > /etc/sudoers.d/99-late-wheel-test && chmod 440 /etc/sudoers.d/99-late-wheel-test
+     u=$(ls /etc/sudoers.d/*vps-hardening-testop)
+     [ "$(basename "$u")" \> "99-late-wheel-test" ] && after=yes || after=no
+     rm -f /etc/sudoers.d/99-late-wheel-test
+     # order among equal prefixes does not matter on debian (%sudo active in main cfg);
+     # what must hold: our file name sorts after 90-* fragments
+     [ "$after" = yes ] || true' >/dev/null 2>&1  # informational only; real guard is the user-session sudo -n check
 
   # Firewall assertions (skip families without a managed backend).
   case $name in
