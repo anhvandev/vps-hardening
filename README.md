@@ -10,6 +10,10 @@ out.
 1. Creates a new admin user (sudo/wheel group) with a generated **ed25519**
    key — the private key is printed **once** to your terminal, or written to
    `--key-out PATH` (chmod 600). It never touches stdout or the log file.
+   The user has **no password** by design, so they get per-user sudo
+   **NOPASSWD** via `/etc/sudoers.d/90-vps-hardening-<user>` — password
+   sudo could never be satisfied and would lock you out of root. Security
+   lives in the private key; consider adding a passphrase to your local copy.
 2. SSH hardening via drop-in `/etc/ssh/sshd_config.d/00-hardening.conf`
    (first-match-wins over provider drop-ins like `50-cloud-init.conf`):
    key-only auth, no root login, optional custom port.
@@ -69,15 +73,48 @@ production VPS is how lockouts happen.
 Requirements on the VPS: root shell, `curl` (or `wget`), `tar`, and systemd as
 PID 1 — all present on mainstream cloud images.
 
-Advanced overrides (environment variables):
+## Picking a different version (env overrides)
+
+Mental model:
+
+```
+the URL you curl        → which install.sh code runs
+VPS_HARDENING_REF=...   → which tarball gets downloaded and executed
+```
+
+`install.sh` is only a downloader (no hardening logic), so an older installer
+can safely pull a newer tarball — as long as the installer itself hasn't
+changed between the two tags.
 
 ```bash
-# fetch a different tag/branch (branches also work, e.g. a hotfix branch)
-curl -fsSL .../v1.0.0/install.sh | sudo VPS_HARDENING_REF=v1.1.0 bash -s -- --user myname
+# fetch a different tag than the URL's installer defaults to
+curl -fsSL https://raw.githubusercontent.com/anhvandev/vps-hardening/v1.0.0/install.sh \
+  | sudo VPS_HARDENING_REF=v1.0.1 bash -s -- --user myname
+
+# test a hotfix that has landed on main but is not tagged yet (one-off only —
+# unlike branch refs, tag tarballs are immutable, so prefer a tag for real use)
+curl -fsSL https://raw.githubusercontent.com/anhvandev/vps-hardening/v1.0.0/install.sh \
+  | sudo VPS_HARDENING_REF=main bash -s -- --user myname
 
 # use a fork
-curl -fsSL .../install.sh | sudo VPS_HARDENING_REPO=you/vps-hardening bash -s -- --user myname
+curl -fsSL https://raw.githubusercontent.com/anhvandev/vps-hardening/v1.0.0/install.sh \
+  | sudo VPS_HARDENING_REPO=you/vps-hardening bash -s -- --user myname
 ```
+
+Quick reference:
+
+| Goal | Command shape |
+|---|---|
+| Pinned stable release | `.../vX.Y.Z/install.sh \| sudo bash -s -- ...` |
+| Different version, keep an old alias/script | add `VPS_HARDENING_REF=vX.Y.Z` after `sudo` |
+| Untagged hotfix (one-off) | `VPS_HARDENING_REF=main` |
+| Fork | `VPS_HARDENING_REPO=owner/repo` (+ `VPS_HARDENING_REF` if needed) |
+
+Limits: the installer that runs is still the one from the URL — if
+`install.sh` itself gets an important fix you must change the URL, env
+overrides don't help. And per-version pinning is a safety feature: this
+script rewrites sshd and firewall rules as root, so "always run the newest
+code" is not the default on purpose.
 
 ## Usage (from a local checkout)
 
