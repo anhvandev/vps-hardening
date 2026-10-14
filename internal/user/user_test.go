@@ -2,8 +2,8 @@ package user
 
 import (
 	"errors"
-	"io"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
