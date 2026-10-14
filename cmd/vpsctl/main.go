@@ -54,7 +54,7 @@ func runHarden(args []string) int {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
 	}
-	lk, err := lock()
+	lk, err := lock(lockPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
@@ -119,9 +119,9 @@ func askTTY(question string) (bool, error) {
 	return a == "y" || a == "yes", nil
 }
 
-// lock takes the global mutation lock; the kernel drops it when the process exits.
-func lock() (*os.File, error) {
-	f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+// lock takes the global mutation lock at path; the kernel drops it when the process exits.
+func lock(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}
