@@ -96,7 +96,7 @@ func hardenHost(o harden.Options, out io.Writer) error {
 		return err
 	}
 	if !h.Supported {
-		fmt.Fprintf(out, "[!] distro %q not in the supported set; proceeding best-effort\n", h.DistroID)
+		fmt.Fprintf(out, "[!] distro %q version %q not in the supported set; proceeding best-effort\n", h.DistroID, h.Version)
 	}
 	fmt.Fprintf(out, "[*] distro %s (family %s), ssh unit %s, socket %q, selinux %v\n",
 		h.DistroID, h.Family, h.SSHUnit, h.SSHSocket, h.SELinux)

@@ -21,7 +21,7 @@ func TestDetect(t *testing.T) {
 				"systemctl is-enabled ssh.socket": disabled,
 				"systemctl is-active ssh.socket":  inactive,
 			},
-			want: Host{DistroID: "ubuntu", Family: "debian", Supported: true, SSHUnit: "ssh", AdminGroup: "sudo", PkgManager: "apt"},
+			want: Host{DistroID: "ubuntu", Version: "22.04", Family: "debian", Supported: true, SSHUnit: "ssh", AdminGroup: "sudo", PkgManager: "apt"},
 		},
 		{
 			// Ubuntu 24.04 ships ssh.socket enabled but not yet started: still socket mode.
@@ -30,7 +30,7 @@ func TestDetect(t *testing.T) {
 				"systemctl is-enabled ssh.socket": {Stdout: "enabled\n"},
 				"systemctl is-active ssh.socket":  inactive,
 			},
-			want: Host{DistroID: "ubuntu", Family: "debian", Supported: true, SSHUnit: "ssh", SSHSocket: "ssh.socket", AdminGroup: "sudo", PkgManager: "apt"},
+			want: Host{DistroID: "ubuntu", Version: "24.04", Family: "debian", Supported: true, SSHUnit: "ssh", SSHSocket: "ssh.socket", AdminGroup: "sudo", PkgManager: "apt"},
 		},
 		{
 			fixture: "debian-12",
@@ -38,7 +38,7 @@ func TestDetect(t *testing.T) {
 				"systemctl is-enabled ssh.socket": disabled,
 				"systemctl is-active ssh.socket":  inactive,
 			},
-			want: Host{DistroID: "debian", Family: "debian", Supported: true, SSHUnit: "ssh", AdminGroup: "sudo", PkgManager: "apt"},
+			want: Host{DistroID: "debian", Version: "12", Family: "debian", Supported: true, SSHUnit: "ssh", AdminGroup: "sudo", PkgManager: "apt"},
 		},
 		{
 			// Active but not enabled also counts as socket mode.
@@ -47,14 +47,14 @@ func TestDetect(t *testing.T) {
 				"systemctl is-enabled ssh.socket": disabled,
 				"systemctl is-active ssh.socket":  {Stdout: "active\n"},
 			},
-			want: Host{DistroID: "debian", Family: "debian", Supported: true, SSHUnit: "ssh", SSHSocket: "ssh.socket", AdminGroup: "sudo", PkgManager: "apt"},
+			want: Host{DistroID: "debian", Version: "13", Family: "debian", Supported: true, SSHUnit: "ssh", SSHSocket: "ssh.socket", AdminGroup: "sudo", PkgManager: "apt"},
 		},
 		{
 			fixture: "rocky-8",
 			results: map[string]Result{
 				"getenforce": {Stdout: "Disabled\n"},
 			},
-			want: Host{DistroID: "rocky", Family: "rhel", Supported: true, SSHUnit: "sshd", AdminGroup: "wheel", PkgManager: "dnf"},
+			want: Host{DistroID: "rocky", Version: "8.10", Family: "rhel", Supported: true, SSHUnit: "sshd", AdminGroup: "wheel", PkgManager: "dnf"},
 		},
 		{
 			fixture: "rocky-9",
@@ -63,7 +63,7 @@ func TestDetect(t *testing.T) {
 				"systemctl is-active sshd.socket":  inactive,
 				"getenforce":                       {Stdout: "Enforcing\n"},
 			},
-			want: Host{DistroID: "rocky", Family: "rhel", Supported: true, SSHUnit: "sshd", SELinux: true, AdminGroup: "wheel", PkgManager: "dnf"},
+			want: Host{DistroID: "rocky", Version: "9.4", Family: "rhel", Supported: true, SSHUnit: "sshd", SELinux: true, AdminGroup: "wheel", PkgManager: "dnf"},
 		},
 		{
 			// Unsupported distro: best-effort defaults, flagged unsupported.
@@ -87,13 +87,46 @@ func TestDetect(t *testing.T) {
 
 func TestDetectAlmaIsRhel(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "os-release")
-	os.WriteFile(path, []byte("ID=\"almalinux\"\nID_LIKE=\"rhel centos fedora\"\n"), 0o644)
+	os.WriteFile(path, []byte("ID=\"almalinux\"\nVERSION_ID=\"9.4\"\nID_LIKE=\"rhel centos fedora\"\n"), 0o644)
 	got, err := Detect(&Fake{}, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Family != "rhel" || !got.Supported || got.PkgManager != "dnf" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// Supported = spec list: Ubuntu 22.04/24.04, Debian 12/13, Rocky/Alma 8/9
+// (major version on RHEL-likes). Anything else is best-effort.
+func TestDetectSupportedChecksVersion(t *testing.T) {
+	cases := map[string]bool{
+		"ID=ubuntu\nVERSION_ID=\"22.04\"":  true,
+		"ID=ubuntu\nVERSION_ID=\"24.04\"":  true,
+		"ID=ubuntu\nVERSION_ID=\"20.04\"":  false,
+		"ID=ubuntu\nVERSION_ID=\"24.10\"":  false,
+		"ID=debian\nVERSION_ID=\"12\"":     true,
+		"ID=debian\nVERSION_ID=\"13\"":     true,
+		"ID=debian\nVERSION_ID=\"11\"":     false,
+		"ID=debian":                        false, // testing/sid: no VERSION_ID
+		"ID=rocky\nVERSION_ID=\"8.10\"":    true,
+		"ID=rocky\nVERSION_ID=\"9.4\"":     true,
+		"ID=rocky\nVERSION_ID=\"10.0\"":    false,
+		"ID=almalinux\nVERSION_ID=\"9.4\"": true,
+		"ID=almalinux\nVERSION_ID=\"7.9\"": false,
+		"ID=arch\nVERSION_ID=\"20240101\"": false,
+		"ID=rocky\nVERSION_ID=\"89\"":      false,
+	}
+	for osr, want := range cases {
+		path := filepath.Join(t.TempDir(), "os-release")
+		os.WriteFile(path, []byte(osr+"\n"), 0o644)
+		got, err := Detect(&Fake{}, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Supported != want {
+			t.Errorf("%q: Supported = %v, want %v", osr, got.Supported, want)
+		}
 	}
 }
 

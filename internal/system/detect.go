@@ -11,6 +11,7 @@ import (
 // Host is what vpsctl needs to know about the machine it runs on.
 type Host struct {
 	DistroID   string // os-release ID, e.g. "ubuntu", "rocky"
+	Version    string // os-release VERSION_ID, e.g. "24.04", "9.4"
 	Family     string // "debian", "rhel", or "" when unknown (best-effort)
 	Supported  bool   // false → caller should warn and proceed best-effort
 	SSHUnit    string // "ssh" (debian family) or "sshd"
@@ -20,7 +21,13 @@ type Host struct {
 	PkgManager string // "apt", "dnf", or "" when unknown
 }
 
-var supportedIDs = []string{"ubuntu", "debian", "rocky", "almalinux"}
+// supported maps os-release ID to supported VERSION_IDs (major only on RHEL-likes).
+var supported = map[string][]string{
+	"ubuntu":    {"22.04", "24.04"},
+	"debian":    {"12", "13"},
+	"rocky":     {"8", "9"},
+	"almalinux": {"8", "9"},
+}
 
 // Detect reads osReleasePath (normally /etc/os-release) and probes the host via r.
 func Detect(r Runner, osReleasePath string) (Host, error) {
@@ -30,7 +37,12 @@ func Detect(r Runner, osReleasePath string) (Host, error) {
 	}
 	osr := parseOSRelease(string(data))
 
-	h := Host{DistroID: osr["ID"], Supported: slices.Contains(supportedIDs, osr["ID"])}
+	h := Host{DistroID: osr["ID"], Version: osr["VERSION_ID"]}
+	version := h.Version
+	if osr["ID"] == "rocky" || osr["ID"] == "almalinux" {
+		version, _, _ = strings.Cut(version, ".")
+	}
+	h.Supported = slices.Contains(supported[osr["ID"]], version)
 	for _, id := range append([]string{osr["ID"]}, strings.Fields(osr["ID_LIKE"])...) {
 		if h.Family != "" {
 			break
