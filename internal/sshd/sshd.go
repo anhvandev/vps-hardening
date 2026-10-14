@@ -82,7 +82,7 @@ func (m *Manager) ensureInclude() error {
 		return nil
 	}
 	m.warn("Include directive missing in " + MainConfig + ": prepending")
-	return writeFile(p, append([]byte(include+"\n"), b...), 0o644)
+	return writeFile(p, append([]byte(include+"\n"), b...), 0) // keep mode (EL: 0600)
 }
 
 var portLine = regexp.MustCompile(`(?mi)^([ \t]*Port[ \t].*)$`)

@@ -479,3 +479,19 @@ func assertRestored(t *testing.T, h *fakeHost, fw *fakeFW, before map[string]str
 func sameRules(a, b []firewall.Rule) bool {
 	return len(a) == len(b) && !slices.ContainsFunc(a, func(r firewall.Rule) bool { return !slices.Contains(b, r) })
 }
+
+// EL ships sshd_config 0600: prepending the Include must keep its mode.
+func TestEnsureIncludeKeepsMainConfigMode(t *testing.T) {
+	h := newFakeHost(t)
+	h.write("/etc/ssh/sshd_config", "Port 22\n")
+	p := filepath.Join(h.root, "/etc/ssh/sshd_config")
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager(h).ensureInclude(); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("sshd_config mode %o, want 600", fi.Mode().Perm())
+	}
+}
