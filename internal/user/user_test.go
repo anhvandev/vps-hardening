@@ -224,6 +224,38 @@ func TestNoControllingTTYTellsToUseKeyOut(t *testing.T) {
 	}
 }
 
+func TestLockDefaultCloudUsersAndBlockCloudInit(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("ubuntu", 1000)
+	h.addUser("alice", 1001)
+	ak := filepath.Join(h.root, "home/ubuntu/.ssh/authorized_keys")
+	os.MkdirAll(filepath.Dir(ak), 0o700)
+	os.WriteFile(ak, []byte("ssh-rsa PROVIDER\n"), 0o600)
+	os.MkdirAll(filepath.Join(h.root, "etc/cloud/cloud.cfg.d"), 0o755)
+	m := newManager(h, "debian")
+
+	if err := m.LockDefaultCloudUsers(); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(ak); fi.Size() != 0 {
+		t.Fatal("authorized_keys not emptied")
+	}
+	calls := strings.Join(h.calls, "\n")
+	if !strings.Contains(calls, "usermod -L -s /usr/sbin/nologin ubuntu") {
+		t.Fatalf("ubuntu not locked: %q", h.calls)
+	}
+	if strings.Contains(calls, "alice") || strings.Contains(calls, "usermod -L -s /usr/sbin/nologin debian") {
+		t.Fatalf("locked a non-cloud or absent user: %q", h.calls)
+	}
+
+	if err := m.BlockCloudInitReinjection(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(h.root, "etc/cloud/cloud.cfg.d/99-vpsctl.cfg")); string(b) != "disable_root: true\nusers: []\n" {
+		t.Fatalf("cloud-init drop-in = %q", b)
+	}
+}
+
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
