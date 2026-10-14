@@ -10,10 +10,10 @@ import (
 
 func TestFirewalldEnsureInstallsAndAllowsSSHPortBeforeStarting(t *testing.T) {
 	b, f := backend(t, "rhel", map[string]system.Result{
-		"dnf install -y firewalld":                  {},
-		"systemctl is-active firewalld":             {Code: 3, Stdout: "inactive\n"},
-		"firewall-offline-cmd --add-port=2222/tcp":  {},
-		"systemctl enable --now firewalld":          {},
+		"dnf install -y firewalld":                 {},
+		"systemctl is-active firewalld":            {Code: 3, Stdout: "inactive\n"},
+		"firewall-offline-cmd --add-port=2222/tcp": {},
+		"systemctl enable --now firewalld":         {},
 	})
 	if err := b.Ensure(2222); err != nil {
 		t.Fatalf("%v (calls %q)", err, f.Calls)
@@ -76,9 +76,9 @@ func mutations(calls []string) []string {
 // and nothing else.
 func TestFirewalldRemoveSSHPortDropsOnlyPort22(t *testing.T) {
 	b, f := backend(t, "rhel", map[string]system.Result{
-		"firewall-cmd --permanent --remove-port=22/tcp":   {},
-		"firewall-cmd --permanent --remove-service=ssh":   {},
-		"firewall-cmd --reload":                           {},
+		"firewall-cmd --permanent --remove-port=22/tcp": {},
+		"firewall-cmd --permanent --remove-service=ssh": {},
+		"firewall-cmd --reload":                         {},
 	})
 	if err := b.Remove(Rule{Port: 22, Proto: "tcp"}); err != nil {
 		t.Fatalf("%v (calls %q)", err, f.Calls)

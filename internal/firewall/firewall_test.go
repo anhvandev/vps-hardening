@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -25,10 +26,10 @@ func index(calls []string, line string) int { return slices.Index(calls, line) }
 // port, cutting the live session on the old one.
 func TestUfwEnsureAllowsCurrentSSHPortBeforeEnabling(t *testing.T) {
 	b, f := backend(t, "debian", map[string]system.Result{
-		"ufw version":                 {},
-		"ufw allow 22/tcp":            {},
-		"ufw status":                  {Stdout: "Status: inactive\n"},
-		"ufw --force enable":          {},
+		"ufw version":        {},
+		"ufw allow 22/tcp":   {},
+		"ufw status":         {Stdout: "Status: inactive\n"},
+		"ufw --force enable": {},
 	})
 	if err := b.Ensure(22); err != nil {
 		t.Fatal(err)
@@ -76,7 +77,6 @@ func TestUfwListParsesFirewallRules(t *testing.T) {
 // Bash bug 2: closing the old SSH port deleted every numeric tcp allow rule.
 func TestUfwRemoveDeletesOnlyThatRule(t *testing.T) {
 	b, f := backend(t, "debian", map[string]system.Result{
-		"ufw show added":          {Stdout: ufwAdded},
 		"ufw delete allow 22/tcp": {},
 	})
 	if err := b.Remove(Rule{Port: 22, Proto: "tcp"}); err != nil {
@@ -107,6 +107,41 @@ func TestUfwAllowAndRemoveCommandForms(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v (calls %q)", err, f.Calls)
 		}
+	}
+}
+
+// mem is an in-memory Backend recording mutations, for Restore.
+type mem struct {
+	rules []Rule
+	ops   []string
+}
+
+func (m *mem) Ensure(int) error      { return nil }
+func (m *mem) List() ([]Rule, error) { return slices.Clone(m.rules), nil }
+func (m *mem) Allow(r Rule) error {
+	m.ops = append(m.ops, fmt.Sprintf("allow %d", r.Port))
+	m.rules = append(m.rules, r)
+	return nil
+}
+func (m *mem) Remove(r Rule) error {
+	m.ops = append(m.ops, fmt.Sprintf("remove %d", r.Port))
+	m.rules = slices.DeleteFunc(m.rules, func(x Rule) bool { return x == r })
+	return nil
+}
+
+// Rollback must re-open the pre-run SSH port before closing anything, so
+// there is never a moment with zero SSH ports allowed.
+func TestRestoreReopensSnapshotRulesBeforeRemovingNewOnes(t *testing.T) {
+	snap := []Rule{{Port: 22, Proto: "tcp"}, {Port: 80, Proto: "tcp"}}
+	m := &mem{rules: []Rule{{Port: 80, Proto: "tcp"}, {Port: 2222, Proto: "tcp"}}}
+	if err := Restore(m, snap); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(m.ops, []string{"allow 22", "remove 2222"}) {
+		t.Fatalf("ops: %q", m.ops)
+	}
+	if !slices.Equal(m.rules, []Rule{{Port: 80, Proto: "tcp"}, {Port: 22, Proto: "tcp"}}) {
+		t.Fatalf("rules: %+v", m.rules)
 	}
 }
 

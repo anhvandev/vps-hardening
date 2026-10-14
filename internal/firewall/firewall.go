@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -88,6 +89,31 @@ func New(h system.Host, r system.Runner, p *system.Packages) (Backend, error) {
 		return &firewalld{r: r, p: p}, nil
 	}
 	return nil, ErrNoBackend
+}
+
+// Restore brings b back to snapshot (a List result taken earlier). Missing
+// rules are re-allowed first; extra rules are removed only if every re-allow
+// succeeded, so a rollback never leaves fewer ports open than the snapshot.
+func Restore(b Backend, snapshot []Rule) error {
+	current, err := b.List()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, r := range snapshot {
+		if !slices.Contains(current, r) {
+			errs = append(errs, b.Allow(r))
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	for _, r := range current {
+		if !slices.Contains(snapshot, r) {
+			errs = append(errs, b.Remove(r))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // run fails on a non-zero exit as well as on a command that could not start.
