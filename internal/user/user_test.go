@@ -132,7 +132,7 @@ func TestInstallKeyWritesKeyOutAndInstallsPubkey(t *testing.T) {
 	m.Host.SELinux = true
 	keyOut := filepath.Join(t.TempDir(), "alice.key")
 
-	if err := m.InstallKey("alice", keyOut, false); err != nil {
+	if err := m.InstallKey("alice", keyOut, false, true); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(keyOut); string(b) != "PRIVATE KEY\n" {
@@ -158,7 +158,7 @@ func TestInstallKeyWritesKeyOutAndInstallsPubkey(t *testing.T) {
 
 	// Re-run: key was emitted by vpsctl → kept, no new key generated.
 	h.calls = nil
-	if err := m.InstallKey("alice", keyOut, false); err != nil {
+	if err := m.InstallKey("alice", keyOut, false, true); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(strings.Join(h.calls, "\n"), "ssh-keygen") {
@@ -174,11 +174,11 @@ func TestInstallKeyRefusesNeverEmittedKeyUnlessRotate(t *testing.T) {
 	os.WriteFile(filepath.Join(h.root, "home/alice/.ssh/authorized_keys"), []byte("ssh-ed25519 OLD\n"), 0o600)
 	keyOut := filepath.Join(t.TempDir(), "k")
 
-	err := m.InstallKey("alice", keyOut, false)
+	err := m.InstallKey("alice", keyOut, false, true)
 	if err == nil || !strings.Contains(err.Error(), "--rotate-key") {
 		t.Fatalf("err = %v, want refusal mentioning --rotate-key", err)
 	}
-	if err := m.InstallKey("alice", keyOut, true); err != nil {
+	if err := m.InstallKey("alice", keyOut, true, true); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(h.root, "home/alice/.ssh/authorized_keys")); string(b) != "ssh-ed25519 AAAA vpsctl\n" {
@@ -191,7 +191,7 @@ func TestPrivateKeyTempDirRemovedOnEveryFailure(t *testing.T) {
 		"ssh-keygen fails": func(h *fakeHost, m *Manager) { h.fail["ssh-keygen"] = true },
 		"restorecon fails": func(h *fakeHost, m *Manager) { m.Host.SELinux = true; h.fail["restorecon"] = true },
 		"tty write fails": func(h *fakeHost, m *Manager) {
-			m.OpenTTY = func() (io.WriteCloser, error) { return failWriter{}, nil }
+			m.OpenTTY = func() (io.ReadWriteCloser, error) { return failWriter{}, nil }
 		},
 	}
 	for name, setup := range cases {
@@ -199,9 +199,9 @@ func TestPrivateKeyTempDirRemovedOnEveryFailure(t *testing.T) {
 			h := newFakeHost(t)
 			h.addUser("alice", os.Getuid())
 			m := newManager(h, "debian")
-			m.OpenTTY = func() (io.WriteCloser, error) { return nopWriteCloser{io.Discard}, nil }
+			m.OpenTTY = func() (io.ReadWriteCloser, error) { return fakeTTY{strings.NewReader("saved\n"), io.Discard}, nil }
 			setup(h, m)
-			if err := m.InstallKey("alice", "", false); err == nil {
+			if err := m.InstallKey("alice", "", false, true); err == nil {
 				t.Fatal("expected error")
 			}
 			assertEmptyDir(t, m.TmpDir)
@@ -213,9 +213,9 @@ func TestNoControllingTTYTellsToUseKeyOut(t *testing.T) {
 	h := newFakeHost(t)
 	h.addUser("alice", os.Getuid())
 	m := newManager(h, "debian")
-	m.OpenTTY = func() (io.WriteCloser, error) { return nil, errors.New("open /dev/tty: no such device") }
+	m.OpenTTY = func() (io.ReadWriteCloser, error) { return nil, errors.New("open /dev/tty: no such device") }
 
-	err := m.InstallKey("alice", "", false)
+	err := m.InstallKey("alice", "", false, true)
 	if err == nil || !strings.Contains(err.Error(), "--key-out") {
 		t.Fatalf("err = %v, want hint to use --key-out", err)
 	}
@@ -256,14 +256,69 @@ func TestLockDefaultCloudUsersAndBlockCloudInit(t *testing.T) {
 	}
 }
 
-type nopWriteCloser struct{ io.Writer }
+// fakeTTY reads the operator's typing from Reader and shows output on Writer.
+type fakeTTY struct {
+	io.Reader
+	io.Writer
+}
 
-func (nopWriteCloser) Close() error { return nil }
+func (fakeTTY) Close() error { return nil }
 
 type failWriter struct{}
 
+func (failWriter) Read([]byte) (int, error)  { return 0, io.EOF }
 func (failWriter) Write([]byte) (int, error) { return 0, errors.New("write /dev/tty: EIO") }
 func (failWriter) Close() error              { return nil }
+
+// Spec "Private key display": after printing the key on the TTY, wait for the
+// operator to type `saved` (re-prompting otherwise) before installing it.
+func TestTTYKeyWaitsForSaved(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("alice", os.Getuid())
+	m := newManager(h, "debian")
+	var screen strings.Builder
+	m.OpenTTY = func() (io.ReadWriteCloser, error) {
+		return fakeTTY{strings.NewReader("ok\n Saved \nsaved\n"), &screen}, nil
+	}
+	if err := m.InstallKey("alice", "", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(screen.String(), "PRIVATE KEY\n") {
+		t.Fatalf("key not shown: %q", screen.String())
+	}
+	if n := strings.Count(screen.String(), "Type 'saved'"); n != 3 {
+		t.Fatalf("prompted %d times, want 3: %q", n, screen.String())
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "home/alice/.ssh/authorized_keys")); err != nil {
+		t.Fatal("key not installed after saved")
+	}
+}
+
+// EOF (or a read error) before `saved` aborts: nothing installed, temp dir gone.
+func TestTTYKeyNotConfirmedAborts(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("alice", os.Getuid())
+	m := newManager(h, "debian")
+	m.OpenTTY = func() (io.ReadWriteCloser, error) { return fakeTTY{strings.NewReader("nope\n"), io.Discard}, nil }
+	if err := m.InstallKey("alice", "", false, true); err == nil {
+		t.Fatal("expected error")
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "home/alice/.ssh/authorized_keys")); err == nil {
+		t.Fatal("key installed although never confirmed saved")
+	}
+	assertEmptyDir(t, m.TmpDir)
+}
+
+// --yes: the key is shown but nothing is read from the TTY.
+func TestTTYKeyNoWaitWithYes(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("alice", os.Getuid())
+	m := newManager(h, "debian")
+	m.OpenTTY = func() (io.ReadWriteCloser, error) { return fakeTTY{strings.NewReader(""), io.Discard}, nil }
+	if err := m.InstallKey("alice", "", false, false); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestEnsureAdminRefusesSystemUsersAndDefaultCloudUsers(t *testing.T) {
 	for _, name := range []string{"daemon", "ubuntu", "ec2-user", "root"} {

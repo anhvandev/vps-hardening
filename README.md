@@ -10,7 +10,8 @@ no arguments only prints a placeholder; the management TUI is not built yet.
 ## What `vpsctl harden` does
 
 1. Creates the **Admin User** (sudo/wheel group) with a generated ed25519
-   key. The private key is printed **once** to the controlling TTY, or
+   key. The private key is printed **once** to the controlling TTY (vpsctl
+   waits until you type `saved`, unless `--yes`), or
    written to `--key-out PATH` (mode 600). It is never logged. The user has
    no password, so they get per-user sudo NOPASSWD
    (`/etc/sudoers.d/99-vpsctl-<user>`).
@@ -76,7 +77,7 @@ sudo vpsctl harden --user myname --rotate-key       # lost the key? rotate
   TTY. Before you answer, log in from a new terminal with the new key
   (`ssh -i key -p PORT user@host`, then `sudo true`). If you answer "no",
   the old SSH config is restored and nothing is locked.
-- `--yes` skips this prompt. vpsctl still checks that sshd accepts pubkey
+- `--yes` skips this prompt (and the `saved` wait). vpsctl still checks that sshd accepts pubkey
   auth for the user, that `authorized_keys` has mode 600 and that `sudo -n`
   works for the user before it locks anything.
 - You cannot use `--port` together with `--skip-firewall`.

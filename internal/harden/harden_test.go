@@ -11,9 +11,10 @@ import (
 
 // fakeHost records every step in order; fail[step] makes that step fail.
 type fakeHost struct {
-	calls []string
-	fail  map[string]bool
-	plan  Plan
+	calls     []string
+	fail      map[string]bool
+	plan      Plan
+	waitSaved bool // last InstallKey waitSaved
 }
 
 func newHost() *fakeHost {
@@ -28,15 +29,18 @@ func (h *fakeHost) step(name string) error {
 	return nil
 }
 
-func (h *fakeHost) EnsureAdmin(string) error              { return h.step("admin") }
-func (h *fakeHost) InstallKey(string, string, bool) error { return h.step("key") }
-func (h *fakeHost) CurrentPort() (int, error)             { return h.plan.OldPort, h.step("port") }
-func (h *fakeHost) PreLockAssertions(string) error        { return h.step("assert") }
-func (h *fakeHost) LockDefaultCloudUsers() error          { return h.step("lock") }
-func (h *fakeHost) BlockCloudInitReinjection() error      { return h.step("cloudinit") }
-func (h *fakeHost) Fail2ban(int) error                    { return h.step("fail2ban") }
-func (h *fakeHost) AutoUpdates() error                    { return h.step("updates") }
-func (h *fakeHost) Sysctl() error                         { return h.step("sysctl") }
+func (h *fakeHost) EnsureAdmin(string) error { return h.step("admin") }
+func (h *fakeHost) InstallKey(_, _ string, _, waitSaved bool) error {
+	h.waitSaved = waitSaved
+	return h.step("key")
+}
+func (h *fakeHost) CurrentPort() (int, error)        { return h.plan.OldPort, h.step("port") }
+func (h *fakeHost) PreLockAssertions(string) error   { return h.step("assert") }
+func (h *fakeHost) LockDefaultCloudUsers() error     { return h.step("lock") }
+func (h *fakeHost) BlockCloudInitReinjection() error { return h.step("cloudinit") }
+func (h *fakeHost) Fail2ban(int) error               { return h.step("fail2ban") }
+func (h *fakeHost) AutoUpdates() error               { return h.step("updates") }
+func (h *fakeHost) Sysctl() error                    { return h.step("sysctl") }
 func (h *fakeHost) EnsureFirewall(int) (firewall.Backend, error) {
 	return nil, h.step("firewall")
 }
@@ -61,6 +65,19 @@ func TestFlowOrder(t *testing.T) {
 		"lock", "cloudinit", "fail2ban", "updates", "sysctl"}
 	if !slices.Equal(h.calls, want) {
 		t.Fatalf("calls\n got %v\nwant %v", h.calls, want)
+	}
+}
+
+// The TTY key waits for `saved` unless --yes (automation has no operator).
+func TestKeyWaitsForSavedUnlessYes(t *testing.T) {
+	for _, yesFlag := range []bool{false, true} {
+		h := newHost()
+		if err := Run(Options{User: "alice", Yes: yesFlag}, h, io.Discard, yes); err != nil {
+			t.Fatal(err)
+		}
+		if h.waitSaved == yesFlag {
+			t.Fatalf("--yes=%v: waitSaved=%v", yesFlag, h.waitSaved)
+		}
 	}
 }
 

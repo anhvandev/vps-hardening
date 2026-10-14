@@ -29,7 +29,7 @@ func ParseFlags(args []string) (Options, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&o.User, "user", "", "Admin User to create (required)")
 	fs.IntVar(&o.Port, "port", 0, "move SSH to this port (default: keep current)")
-	fs.BoolVar(&o.Yes, "yes", false, "skip the Verify Gate prompt (pre-lock assertions still run)")
+	fs.BoolVar(&o.Yes, "yes", false, "skip the saved-key and Verify Gate prompts (pre-lock assertions still run)")
 	fs.StringVar(&o.KeyOut, "key-out", "", "write the private key to this file (mode 600) instead of the TTY")
 	fs.BoolVar(&o.RotateKey, "rotate-key", false, "generate and install a new key")
 	fs.BoolVar(&o.SkipFirewall, "skip-firewall", false, "do not manage ufw/firewalld")
@@ -55,7 +55,7 @@ func ParseFlags(args []string) (Options, error) {
 // Host is everything Hardening does to the machine (*Machine in production).
 type Host interface {
 	EnsureAdmin(name string) error
-	InstallKey(name, keyOut string, rotate bool) error
+	InstallKey(name, keyOut string, rotate, waitSaved bool) error
 	CurrentPort() (int, error)
 	// EnsureFirewall returns nil, nil when the distro has no managed firewall.
 	EnsureFirewall(sshPort int) (firewall.Backend, error)
@@ -96,7 +96,7 @@ func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, erro
 	if err := h.EnsureAdmin(o.User); err != nil {
 		return err
 	}
-	if err := h.InstallKey(o.User, o.KeyOut, o.RotateKey); err != nil {
+	if err := h.InstallKey(o.User, o.KeyOut, o.RotateKey, !o.Yes); err != nil {
 		return err
 	}
 

@@ -1,19 +1,22 @@
 package user
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // InstallKey makes sure name holds an SSH key someone actually has: it
 // generates an ed25519 pair, shows the private half once (written to keyOut
-// with mode 600, or printed on the controlling TTY when keyOut is "") and
+// with mode 600, or printed on the controlling TTY when keyOut is "", then,
+// with waitSaved, held until the operator types `saved`) and
 // installs the public half as the user's authorized_keys. A key vpsctl already
 // emitted is kept; a key it never emitted is refused unless rotate.
-func (m *Manager) InstallKey(name, keyOut string, rotate bool) error {
+func (m *Manager) InstallKey(name, keyOut string, rotate, waitSaved bool) error {
 	acct, exists, err := m.lookup(name)
 	if err != nil {
 		return err
@@ -64,6 +67,11 @@ func (m *Manager) InstallKey(name, keyOut string, rotate bool) error {
 	if _, err := out.Write(priv); err != nil {
 		return fmt.Errorf("emit private key: %w", err)
 	}
+	if keyOut == "" && waitSaved {
+		if err := waitForSaved(out); err != nil {
+			return err
+		}
+	}
 
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		return err
@@ -92,8 +100,26 @@ func (m *Manager) InstallKey(name, keyOut string, rotate bool) error {
 	return os.WriteFile(marker, nil, 0o600)
 }
 
+// waitForSaved re-prompts on tty until the operator types `saved`; EOF or a
+// read error means the key may not be stored, so it aborts.
+func waitForSaved(tty io.ReadWriter) error {
+	in := bufio.NewReader(tty)
+	for {
+		if _, err := fmt.Fprint(tty, "Type 'saved' once the private key is stored safely: "); err != nil {
+			return err
+		}
+		line, err := in.ReadString('\n')
+		if strings.TrimSpace(line) == "saved" {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("private key not confirmed saved: %w", err)
+		}
+	}
+}
+
 // openKeyOut opens where the private key goes: keyOut (mode 600) or the TTY.
-func (m *Manager) openKeyOut(keyOut string) (io.WriteCloser, error) {
+func (m *Manager) openKeyOut(keyOut string) (io.ReadWriteCloser, error) {
 	if keyOut != "" {
 		f, err := os.OpenFile(keyOut, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
@@ -107,7 +133,7 @@ func (m *Manager) openKeyOut(keyOut string) (io.WriteCloser, error) {
 	}
 	open := m.OpenTTY
 	if open == nil {
-		open = func() (io.WriteCloser, error) { return os.OpenFile("/dev/tty", os.O_WRONLY, 0) }
+		open = func() (io.ReadWriteCloser, error) { return os.OpenFile("/dev/tty", os.O_RDWR, 0) }
 	}
 	tty, err := open()
 	if err != nil {

@@ -35,7 +35,7 @@ type Manager struct {
 	Pkgs    Installer
 	Root    string
 	TmpDir  string
-	OpenTTY func() (io.WriteCloser, error)
+	OpenTTY func() (io.ReadWriteCloser, error)
 }
 
 var validName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
