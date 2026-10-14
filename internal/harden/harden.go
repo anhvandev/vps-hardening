@@ -14,11 +14,11 @@ import (
 
 // Options are the `vpsctl harden` flags.
 type Options struct {
-	User                                               string
-	Port                                               int // 0 = keep the current SSH port
-	Yes                                                bool
-	KeyOut                                             string
-	RotateKey                                          bool
+	User                                                string
+	Port                                                int // 0 = keep the current SSH port
+	Yes                                                 bool
+	KeyOut                                              string
+	RotateKey                                           bool
 	SkipFirewall, SkipFail2ban, SkipUpdates, SkipSysctl bool
 }
 

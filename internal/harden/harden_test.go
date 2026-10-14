@@ -28,15 +28,15 @@ func (h *fakeHost) step(name string) error {
 	return nil
 }
 
-func (h *fakeHost) EnsureAdmin(string) error               { return h.step("admin") }
-func (h *fakeHost) InstallKey(string, string, bool) error  { return h.step("key") }
-func (h *fakeHost) CurrentPort() (int, error)               { return h.plan.OldPort, h.step("port") }
-func (h *fakeHost) PreLockAssertions(string) error         { return h.step("assert") }
-func (h *fakeHost) LockDefaultCloudUsers() error           { return h.step("lock") }
-func (h *fakeHost) BlockCloudInitReinjection() error       { return h.step("cloudinit") }
-func (h *fakeHost) Fail2ban(int) error                     { return h.step("fail2ban") }
-func (h *fakeHost) AutoUpdates() error                     { return h.step("updates") }
-func (h *fakeHost) Sysctl() error                          { return h.step("sysctl") }
+func (h *fakeHost) EnsureAdmin(string) error              { return h.step("admin") }
+func (h *fakeHost) InstallKey(string, string, bool) error { return h.step("key") }
+func (h *fakeHost) CurrentPort() (int, error)             { return h.plan.OldPort, h.step("port") }
+func (h *fakeHost) PreLockAssertions(string) error        { return h.step("assert") }
+func (h *fakeHost) LockDefaultCloudUsers() error          { return h.step("lock") }
+func (h *fakeHost) BlockCloudInitReinjection() error      { return h.step("cloudinit") }
+func (h *fakeHost) Fail2ban(int) error                    { return h.step("fail2ban") }
+func (h *fakeHost) AutoUpdates() error                    { return h.step("updates") }
+func (h *fakeHost) Sysctl() error                         { return h.step("sysctl") }
 func (h *fakeHost) EnsureFirewall(int) (firewall.Backend, error) {
 	return nil, h.step("firewall")
 }
