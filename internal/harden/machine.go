@@ -66,7 +66,7 @@ func (m *Machine) BeginSSH(fw firewall.Backend, port int, user string) (Change, 
 // password auth goes away: pubkey auth effective for name, a non-empty
 // authorized_keys (600, owned by name), and `sudo -n` working as name.
 func (m *Machine) PreLockAssertions(name string) error {
-	out, err := m.output("sshd", "-T", "-C", "user="+name+",host=localhost,addr=127.0.0.1")
+	out, err := m.SSH.Effective("-C", "user="+name+",host=localhost,addr=127.0.0.1")
 	if err != nil {
 		return err
 	}

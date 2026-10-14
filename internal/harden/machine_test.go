@@ -34,12 +34,18 @@ func TestPreLockAssertions(t *testing.T) {
 		}}
 		ak := filepath.Join(root, "/home/alice/.ssh/authorized_keys")
 		write(t, ak, "ssh-ed25519 AAAA vpsctl-alice\n", 0o600)
+		write(t, filepath.Join(root, "/etc/ssh/ssh_host_ed25519_key"), "k", 0o600)
 		return NewMachine(f, system.Host{}, root, io.Discard), f, ak
 	}
 
 	m, _, _ := setup()
 	if err := m.PreLockAssertions("alice"); err != nil {
 		t.Fatalf("healthy host: %v", err)
+	}
+	// sshd -T needs the privsep dir, which systemd removes whenever ssh.service
+	// stops (e.g. a socket restart on a port change).
+	if _, err := os.Stat(filepath.Join(m.Root, "/run/sshd")); err != nil {
+		t.Errorf("privsep dir not ensured before sshd -T -C: %v", err)
 	}
 
 	for name, breakIt := range map[string]func(f *system.Fake, ak string){

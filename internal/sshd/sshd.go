@@ -55,7 +55,7 @@ func (m *Manager) warn(s string) {
 
 // CurrentPort is the port sshd is configured for now (first `port` of sshd -T).
 func (m *Manager) CurrentPort() (int, error) {
-	out, err := m.effective()
+	out, err := m.Effective()
 	if err != nil {
 		return 0, err
 	}
@@ -114,7 +114,7 @@ func (m *Manager) write(port int, stageB bool) (bool, error) {
 	if stageB {
 		// EL8's OpenSSH predates KbdInteractiveAuthentication.
 		kbd := "ChallengeResponseAuthentication"
-		if out, err := m.effective(); err == nil && len(values(out, "kbdinteractiveauthentication")) > 0 {
+		if out, err := m.Effective(); err == nil && len(values(out, "kbdinteractiveauthentication")) > 0 {
 			kbd = "KbdInteractiveAuthentication"
 		}
 		s += "PasswordAuthentication no\n" + kbd + " no\nPubkeyAuthentication yes\nPermitRootLogin no\n"
@@ -135,7 +135,7 @@ func (m *Manager) validate(port int, user string) error {
 	if err := m.run("sshd", "-t"); err != nil {
 		return fmt.Errorf("refusing invalid sshd config: %w", err)
 	}
-	out, err := m.effective()
+	out, err := m.Effective()
 	if err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func (m *Manager) validate(port int, user string) error {
 	if err := hardened(out); err != nil {
 		return err
 	}
-	out, err = m.output("sshd", "-T", "-C", "user="+user+",host=localhost,addr=127.0.0.1")
+	out, err = m.Effective("-C", "user="+user+",host=localhost,addr=127.0.0.1")
 	if err != nil {
 		return err
 	}
@@ -281,9 +281,10 @@ func (m *Manager) verifyListener(port int) error {
 	return fmt.Errorf("no sshd listener on port %d after 3 attempts", port)
 }
 
-// effective returns `sshd -T` output, creating host keys and the privsep dir
-// first (sshd -T/-t fail without them before the daemon's first start).
-func (m *Manager) effective() (string, error) {
+// Effective returns `sshd -T args...` output (e.g. "-C", "user=..."), creating
+// host keys and the privsep dir first: sshd -T/-t fail without them before the
+// daemon's first start, and systemd removes /run/sshd whenever ssh.service stops.
+func (m *Manager) Effective(args ...string) (string, error) {
 	if keys, _ := filepath.Glob(m.path("/etc/ssh/ssh_host_*")); len(keys) == 0 {
 		if err := m.run("ssh-keygen", "-A"); err != nil {
 			return "", err
@@ -292,7 +293,7 @@ func (m *Manager) effective() (string, error) {
 	if err := os.MkdirAll(m.path("/run/sshd"), 0o755); err != nil {
 		return "", err
 	}
-	return m.output("sshd", "-T")
+	return m.output("sshd", append([]string{"-T"}, args...)...)
 }
 
 // values returns every value of key in sshd -T output.
