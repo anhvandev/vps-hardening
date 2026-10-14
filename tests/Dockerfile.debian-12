@@ -1,4 +1,4 @@
-# systemd container for vps-hardening tests. Debian 12: service activation.
+# systemd container for vpsctl tests. Debian 12: service activation.
 FROM debian:12
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && \

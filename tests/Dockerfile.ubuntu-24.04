@@ -1,4 +1,4 @@
-# systemd container for vps-hardening tests. Ubuntu 24.04: force SOCKET mode.
+# systemd container for vpsctl tests. Ubuntu 24.04: force SOCKET mode.
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && \
