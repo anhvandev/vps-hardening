@@ -170,7 +170,10 @@ for entry in "${MATRIX[@]}"; do
   # --- Port change on a hardened host; foreign 80/tcp rule survives ----------
   case $name in
     rockylinux-*) x 'firewall-cmd --permanent --add-port=80/tcp && firewall-cmd --reload' >/dev/null ;;
-    *) x 'ufw allow 80/tcp' >/dev/null ;;
+    *) x 'ufw allow 80/tcp' >/dev/null
+       # Other forms opening the old port: all must be closed by the move.
+       check "move: pre-existing ufw limit $P/tcp + allow $P" x "ufw limit $P/tcp && ufw allow $P"
+       [[ $P == 22 ]] && check "move: pre-existing ufw OpenSSH profile" x 'ufw allow OpenSSH' ;;
   esac
   N=2200
   harden move --user testop --yes --port $N
@@ -180,6 +183,8 @@ for entry in "${MATRIX[@]}"; do
   check "move: $P closed" eval "! listening $P"
   check "move: firewall allows $N" fw_allows "$N"
   check "move: firewall no longer allows $P" eval "! fw_allows $P"
+  [[ $name != rockylinux-* ]] && check "move: no ufw limit/proto-less/OpenSSH rule left for $P" \
+    eval "! x \"ufw status | grep -qE '^($P(/tcp)?|OpenSSH)[[:space:]]'\""
   check "move: 80/tcp rule survived" fw_allows 80
   check "move: key login on $N" login /root/k2 "$N"
   check "move: still hardened" sshdT 'passwordauthentication no'
