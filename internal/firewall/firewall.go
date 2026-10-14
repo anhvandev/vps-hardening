@@ -84,6 +84,8 @@ func New(h system.Host, r system.Runner, p *system.Packages) (Backend, error) {
 	switch h.Family {
 	case "debian":
 		return &ufw{r: r, p: p}, nil
+	case "rhel":
+		return &firewalld{r: r, p: p}, nil
 	}
 	return nil, ErrNoBackend
 }
