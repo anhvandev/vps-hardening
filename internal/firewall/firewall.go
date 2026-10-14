@@ -19,6 +19,7 @@ type Rule struct {
 	End   int    // last port of a range; 0 = single port
 	Proto string // "tcp", "udp", or "" = both (ufw only)
 	From  string // source IP/CIDR; "" = anywhere
+	Limit bool   // rate-limited allow (`ufw limit`, ufw only)
 }
 
 // Backend is one host firewall implementation. Allow and Remove act on

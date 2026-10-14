@@ -293,6 +293,7 @@ func TestAnyFailureAfterMutationRestoresSnapshot(t *testing.T) {
 // roll back through Restore, including after a fully applied Stage B.
 func TestRestoreAfterStageBReturnsToSnapshot(t *testing.T) {
 	h, fw := newFakeHost(t), newFW()
+	fw.rules = append(fw.rules, oldPortForms...)
 	before, rulesBefore := h.tree(), slices.Clone(fw.rules)
 	c, err := manager(h).Begin(fw, 2222, "alice")
 	if err != nil {
@@ -352,10 +353,15 @@ func TestRollbackNeverLeavesZeroSSHPortsAllowed(t *testing.T) {
 	}
 }
 
-// Bash bug 2: closing the old SSH port must remove exactly that rule.
+// oldPortForms: rules besides 22/tcp that open the old SSH port to anyone.
+var oldPortForms = []firewall.Rule{{Port: 22}, {Port: 22, Proto: "tcp", Limit: true}}
+
+// Bash bug 2: closing the old SSH port must remove exactly the rules that
+// open it to anyone (allow, proto-less allow, limit), nothing else.
 func TestStageBClosesOnlyTheOldSSHPort(t *testing.T) {
 	h, fw := newFakeHost(t), newFW()
 	fw.rules = append(fw.rules, firewall.Rule{Port: 22, Proto: "tcp", From: "203.0.113.0/24"})
+	fw.rules = append(fw.rules, oldPortForms...)
 	c, err := manager(h).Begin(fw, 2222, "alice")
 	if err != nil {
 		t.Fatal(err)

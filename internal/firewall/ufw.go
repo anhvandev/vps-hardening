@@ -2,6 +2,7 @@ package firewall
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -35,9 +36,10 @@ func (u *ufw) Ensure(sshPort int) error {
 }
 
 // List reads `ufw show added`, which (unlike `ufw status`) also works while
-// ufw is inactive and prints each rule once (no v6 duplicates). Only plain
-// incoming allow rules are Firewall Rules; app profiles, limit and
-// interface rules are skipped.
+// ufw is inactive and prints each rule once (no v6 duplicates). Incoming
+// allow and limit rules are Firewall Rules; the OpenSSH app profile is listed
+// as 22/tcp (like firewalld's ssh service); other app profiles and interface
+// rules are skipped.
 func (u *ufw) List() ([]Rule, error) {
 	out, err := run(u.r, "ufw", "show", "added")
 	if err != nil {
@@ -49,12 +51,17 @@ func (u *ufw) List() ([]Rule, error) {
 		if i := slices.Index(f, "comment"); i >= 0 {
 			f = f[:i]
 		}
-		if len(f) < 3 || f[0] != "ufw" || f[1] != "allow" {
+		if len(f) < 3 || f[0] != "ufw" || (f[1] != "allow" && f[1] != "limit") {
 			continue
 		}
-		var r Rule
+		r := Rule{Limit: f[1] == "limit"}
 		var spec string
 		switch f = f[2:]; {
+		case !r.Limit && len(f) == 1 && f[0] == "OpenSSH":
+			if !slices.Contains(rules, sshRule) {
+				rules = append(rules, sshRule)
+			}
+			continue
 		case len(f) == 1:
 			spec, r.Proto, _ = strings.Cut(f[0], "/")
 		case len(f) >= 6 && f[0] == "from" && f[2] == "to" && f[3] == "any" && f[4] == "port":
@@ -79,25 +86,41 @@ func (u *ufw) Allow(r Rule) error {
 	if err := r.validate(); err != nil {
 		return err
 	}
-	_, err := run(u.r, "ufw", append([]string{"allow"}, ufwArgs(r)...)...)
+	_, err := run(u.r, "ufw", ufwArgs(r)...)
 	return err
 }
 
-// Remove deletes exactly r (both v4 and v6 copies, as ufw does).
+// Remove deletes exactly r (both v4 and v6 copies, as ufw does). Removing
+// 22/tcp also drops the OpenSSH app profile, which List shows as 22/tcp.
 func (u *ufw) Remove(r Rule) error {
-	_, err := run(u.r, "ufw", append([]string{"delete", "allow"}, ufwArgs(r)...)...)
+	if _, err := run(u.r, "ufw", append([]string{"delete"}, ufwArgs(r)...)...); err != nil {
+		return err
+	}
+	if r != sshRule {
+		return nil
+	}
+	out, err := run(u.r, "ufw", "show", "added")
+	if err != nil || !regexp.MustCompile(`(?m)^ufw allow OpenSSH\s*$`).MatchString(out) {
+		return err
+	}
+	_, err = run(u.r, "ufw", "delete", "allow", "OpenSSH")
 	return err
 }
 
+// ufwArgs is the rule part of a ufw command, starting with allow/limit.
 func ufwArgs(r Rule) []string {
+	verb := "allow"
+	if r.Limit {
+		verb = "limit"
+	}
 	if r.From == "" {
 		spec := r.ports(":")
 		if r.Proto != "" {
 			spec += "/" + r.Proto
 		}
-		return []string{spec}
+		return []string{verb, spec}
 	}
-	args := []string{"from", r.From, "to", "any", "port", r.ports(":")}
+	args := []string{verb, "from", r.From, "to", "any", "port", r.ports(":")}
 	if r.Proto != "" {
 		args = append(args, "proto", r.Proto)
 	}

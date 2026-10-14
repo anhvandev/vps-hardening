@@ -125,7 +125,7 @@ func (c *Change) StageA() error {
 
 // StageB (after the Verify Gate) adds auth hardening, validates it globally
 // and for the Admin User, applies, and only then closes the old SSH port —
-// exactly that one rule. Restores on failure.
+// only the rules opening it to anyone. Restores on failure.
 func (c *Change) StageB() error {
 	return c.restoreOnError(func() error {
 		m := c.m
@@ -147,8 +147,20 @@ func (c *Change) StageB() error {
 		if m.listening(c.OldPort) {
 			m.warn(fmt.Sprintf("old port %d is still listening: check for foreign Port directives", c.OldPort))
 		}
-		if c.fw != nil {
-			return c.fw.Remove(tcp(c.OldPort))
+		if c.fw == nil {
+			return nil
+		}
+		if err := c.fw.Remove(tcp(c.OldPort)); err != nil {
+			return err
+		}
+		// Also the other forms that open it to anyone (ufw `allow <port>`,
+		// `limit <port>/tcp`); source-limited and other ports' rules stay.
+		for _, r := range c.rules {
+			if r != tcp(c.OldPort) && r.Port == c.OldPort && r.End == 0 && r.From == "" && r.Proto != "udp" {
+				if err := c.fw.Remove(r); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})

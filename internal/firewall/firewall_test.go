@@ -68,15 +68,54 @@ func TestUfwListParsesFirewallRules(t *testing.T) {
 		{Port: 6000, End: 6100, Proto: "udp"},
 		{Port: 22, Proto: "tcp", From: "203.0.113.0/24"},
 		{Port: 8080, From: "10.0.0.5"},
+		{Port: 25, Proto: "tcp", Limit: true},
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)
 	}
 }
 
+// Like firewalld's ssh service: the OpenSSH app profile is listed as 22/tcp.
+func TestUfwListMapsOpenSSHProfileTo22(t *testing.T) {
+	b, _ := backend(t, "debian", map[string]system.Result{"ufw show added": {Stdout: "ufw allow OpenSSH\nufw allow 80/tcp\n"}})
+	got, err := b.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Rule{{Port: 22, Proto: "tcp"}, {Port: 80, Proto: "tcp"}}; !slices.Equal(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+// Removing 22/tcp also drops the OpenSSH app profile (which opens 22).
+func TestUfwRemoveSSHPortDropsOpenSSHProfile(t *testing.T) {
+	b, f := backend(t, "debian", map[string]system.Result{
+		"ufw show added":           {Stdout: "ufw allow 22/tcp\nufw allow OpenSSH\nufw allow 80/tcp\n"},
+		"ufw delete allow 22/tcp":  {},
+		"ufw delete allow OpenSSH": {},
+	})
+	if err := b.Remove(Rule{Port: 22, Proto: "tcp"}); err != nil {
+		t.Fatalf("%v (calls %q)", err, f.Calls)
+	}
+	if got := ufwMutations(f.Calls); !slices.Equal(got, []string{"ufw delete allow 22/tcp", "ufw delete allow OpenSSH"}) {
+		t.Fatalf("mutations: %q", got)
+	}
+}
+
+func ufwMutations(calls []string) []string {
+	var m []string
+	for _, c := range calls {
+		if strings.HasPrefix(c, "ufw delete") || strings.HasPrefix(c, "ufw allow") || strings.HasPrefix(c, "ufw limit") {
+			m = append(m, c)
+		}
+	}
+	return m
+}
+
 // Bash bug 2: closing the old SSH port deleted every numeric tcp allow rule.
 func TestUfwRemoveDeletesOnlyThatRule(t *testing.T) {
 	b, f := backend(t, "debian", map[string]system.Result{
+		"ufw show added":          {Stdout: "ufw allow 22/tcp\nufw allow 2222/tcp\nufw allow 80/tcp\nufw allow 22\n"},
 		"ufw delete allow 22/tcp": {},
 	})
 	if err := b.Remove(Rule{Port: 22, Proto: "tcp"}); err != nil {
@@ -98,11 +137,15 @@ func TestUfwAllowAndRemoveCommandForms(t *testing.T) {
 		"ufw allow 6000:6100/udp":                                {},
 		"ufw allow from 203.0.113.0/24 to any port 22 proto tcp": {},
 		"ufw delete allow from 10.0.0.5 to any port 8080":        {},
+		"ufw limit 22/tcp":                                       {},
+		"ufw delete limit 25/tcp":                                {},
 	})
 	for _, err := range []error{
 		b.Allow(Rule{Port: 6000, End: 6100, Proto: "udp"}),
 		b.Allow(Rule{Port: 22, Proto: "tcp", From: "203.0.113.0/24"}),
 		b.Remove(Rule{Port: 8080, From: "10.0.0.5"}),
+		b.Allow(Rule{Port: 22, Proto: "tcp", Limit: true}),
+		b.Remove(Rule{Port: 25, Proto: "tcp", Limit: true}),
 	} {
 		if err != nil {
 			t.Fatalf("%v (calls %q)", err, f.Calls)
