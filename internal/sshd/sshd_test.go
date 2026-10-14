@@ -27,6 +27,10 @@ type fakeHost struct {
 	calls     []string
 	restarts  []string // drop-in content at each sshd/socket restart
 	stuck     bool     // restarts never move the listener
+	// svcHolds: port whose listening fd a running socket-activated ssh.service
+	// (Accept=no, no Requires= on the socket: Debian 13) still holds; 0 = not running.
+	// A socket restart does not stop that service, so it cannot rebind svcHolds.
+	svcHolds int
 }
 
 func newFakeHost(t *testing.T) *fakeHost {
@@ -153,9 +157,17 @@ func (h *fakeHost) Run(name string, args ...string) (system.Result, error) {
 					h.listening = []int{p}
 				}
 			}
+			if h.svcHolds != 0 {
+				if h.listening[0] == h.svcHolds {
+					return system.Result{Code: 1, Stderr: "Address already in use"}, nil
+				}
+				h.listening = append(h.listening, h.svcHolds)
+			}
 		} else {
 			h.listening, _ = h.effective()
 		}
+	case name == "systemctl" && args[0] == "stop" && args[1] == "ssh":
+		h.svcHolds = 0
 	case name == "ss":
 		p, _ := strconv.Atoi(strings.TrimPrefix(args[len(args)-1], "sport = :"))
 		if slices.Contains(h.listening, p) {
@@ -393,6 +405,32 @@ func TestSocketModelPortChangeWritesSocketDropInAndNeverReloads(t *testing.T) {
 		if strings.Contains(call, "reload") && call != "systemctl daemon-reload" {
 			t.Fatalf("used reload: %q", call)
 		}
+	}
+}
+
+// Debian 13: ssh.socket (Accept=no) does not stop a running ssh.service on
+// restart, so that sshd keeps the old listener. The service must be stopped
+// first, or the new port is never served and a rollback cannot rebind the old one.
+func TestSocketRestartStopsRunningServiceSoPortMovesAndRollsBack(t *testing.T) {
+	h := newFakeHost(t)
+	h.socket = "ssh.socket"
+	h.svcHolds = 22 // someone logged in: ssh.service is running
+	c, err := manager(h).Begin(newFW(), 2222, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.StageA(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(h.listening, []int{2222}) {
+		t.Fatalf("after StageA listening %v, want only 2222", h.listening)
+	}
+	h.svcHolds = 2222 // a login on the new port starts ssh.service again
+	if err := c.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(h.listening, []int{22}) {
+		t.Fatalf("after Restore listening %v, want only 22", h.listening)
 	}
 }
 

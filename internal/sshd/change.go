@@ -190,12 +190,13 @@ func (c *Change) Restore() error {
 	}
 	sshdOK := true
 	if dirty {
-		unit := m.Host.SSHUnit
+		var err error
 		if m.Host.SSHSocket != "" {
-			unit = m.Host.SSHSocket
 			errs = append(errs, m.run("systemctl", "daemon-reload"))
+			err = m.restartSocket()
+		} else {
+			err = m.run("systemctl", "restart", m.Host.SSHUnit)
 		}
-		err := m.run("systemctl", "restart", unit)
 		if err == nil {
 			err = m.verifyListener(c.OldPort)
 		}

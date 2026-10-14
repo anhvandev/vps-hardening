@@ -194,22 +194,33 @@ func (m *Manager) apply(port int, portChanged bool) error {
 			return err
 		}
 	}
-	unit := m.Host.SSHUnit
-	if sock := m.Host.SSHSocket; sock != "" {
+	restart := func() error { return m.run("systemctl", "restart", m.Host.SSHUnit) }
+	if m.Host.SSHSocket != "" {
 		if err := m.run("systemctl", "daemon-reload"); err != nil {
 			return err
 		}
 		if portChanged {
-			unit = sock
 			if err := m.ensureSocketPort(port); err != nil {
 				return err
 			}
+			restart = m.restartSocket
 		}
 	}
-	if err := m.run("systemctl", "restart", unit); err != nil {
+	if err := restart(); err != nil {
 		return err
 	}
 	return m.verifyListener(port)
+}
+
+// restartSocket stops the SSH service, then restarts the socket: on Debian 13
+// ssh.socket (Accept=no) is not required by ssh.service, so a running sshd
+// would keep the old listener (the new port never served, the old one never
+// rebindable). Open sessions survive: the units use KillMode=process.
+func (m *Manager) restartSocket() error {
+	if err := m.run("systemctl", "stop", m.Host.SSHUnit); err != nil {
+		return err
+	}
+	return m.run("systemctl", "restart", m.Host.SSHSocket)
 }
 
 // ensureSocketPort writes a manual ListenStream drop-in when the sshd socket
