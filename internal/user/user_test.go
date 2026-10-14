@@ -320,6 +320,19 @@ func TestTTYKeyNoWaitWithYes(t *testing.T) {
 	}
 }
 
+func TestLookupReadsPasswdEntry(t *testing.T) {
+	h := newFakeHost(t)
+	h.users["alice"] = "alice:x:1001:1002:Alice:/home/alice:/bin/bash"
+	m := newManager(h, "debian")
+	pw, ok, err := m.Lookup("alice")
+	if err != nil || !ok || pw != (PasswdEntry{UID: 1001, GID: 1002, Home: "/home/alice"}) {
+		t.Fatalf("Lookup(alice) = %+v, %v, %v", pw, ok, err)
+	}
+	if _, ok, err := m.Lookup("bob"); ok || err != nil {
+		t.Fatalf("Lookup(bob) = %v, %v; want absent, no error", ok, err)
+	}
+}
+
 func TestEnsureAdminRefusesSystemUsersAndDefaultCloudUsers(t *testing.T) {
 	for _, name := range []string{"daemon", "ubuntu", "ec2-user", "root"} {
 		h := newFakeHost(t)

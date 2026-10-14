@@ -17,14 +17,14 @@ import (
 // installs the public half as the user's authorized_keys. A key vpsctl already
 // emitted is kept; a key it never emitted is refused unless rotate.
 func (m *Manager) InstallKey(name, keyOut string, rotate, waitSaved bool) error {
-	acct, exists, err := m.lookup(name)
+	pw, exists, err := m.Lookup(name)
 	if err != nil {
 		return err
 	}
 	if !exists {
 		return fmt.Errorf("user %q does not exist", name)
 	}
-	sshDir := filepath.Join(m.Root, acct.home, ".ssh")
+	sshDir := filepath.Join(m.Root, pw.Home, ".ssh")
 	marker := filepath.Join(m.Root, "/var/lib/vpsctl", "key-emitted-"+name)
 	if !rotate {
 		if fi, err := os.Stat(filepath.Join(sshDir, "authorized_keys")); err == nil && fi.Size() > 0 {
@@ -79,11 +79,11 @@ func (m *Manager) InstallKey(name, keyOut string, rotate, waitSaved bool) error 
 	if err := os.Chmod(sshDir, 0o700); err != nil {
 		return err
 	}
-	if err := os.Chown(sshDir, acct.uid, acct.gid); err != nil {
+	if err := os.Chown(sshDir, pw.UID, pw.GID); err != nil {
 		return err
 	}
 	if err := writeAtomic(filepath.Join(sshDir, "authorized_keys"), pub, 0o600, func(tmp string) error {
-		return os.Chown(tmp, acct.uid, acct.gid)
+		return os.Chown(tmp, pw.UID, pw.GID)
 	}); err != nil {
 		return err
 	}

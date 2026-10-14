@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -73,25 +72,20 @@ func (m *Machine) PreLockAssertions(name string) error {
 	if !regexp.MustCompile(`(?m)^pubkeyauthentication yes$`).MatchString(out) {
 		return fmt.Errorf("pubkey auth not effective for %s", name)
 	}
-	pw, err := m.output("getent", "passwd", name)
+	pw, exists, err := m.Lookup(name)
 	if err != nil {
 		return err
 	}
-	f := strings.Split(strings.TrimSpace(pw), ":")
-	if len(f) < 7 {
-		return fmt.Errorf("getent passwd %s: %q", name, pw)
+	if !exists {
+		return fmt.Errorf("user %q does not exist", name)
 	}
-	uid, err := strconv.Atoi(f[2])
-	if err != nil {
-		return fmt.Errorf("getent passwd %s: %q", name, pw)
-	}
-	ak := filepath.Join(f[5], ".ssh/authorized_keys")
+	ak := filepath.Join(pw.Home, ".ssh/authorized_keys")
 	fi, err := os.Stat(filepath.Join(m.Root, ak))
 	if err != nil {
 		return err
 	}
 	st, _ := fi.Sys().(*syscall.Stat_t)
-	if fi.Size() == 0 || fi.Mode().Perm() != 0o600 || st == nil || int(st.Uid) != uid {
+	if fi.Size() == 0 || fi.Mode().Perm() != 0o600 || st == nil || int(st.Uid) != pw.UID {
 		return fmt.Errorf("%s must be non-empty, mode 600 and owned by %s", ak, name)
 	}
 	if _, err := m.output("sudo", "-u", name, "sudo", "-n", "true"); err != nil {

@@ -49,12 +49,12 @@ func (m *Manager) EnsureAdmin(name string) error {
 	if !validName.MatchString(name) {
 		return fmt.Errorf("invalid user name %q", name)
 	}
-	acct, exists, err := m.lookup(name)
+	pw, exists, err := m.Lookup(name)
 	if err != nil {
 		return err
 	}
-	if exists && acct.uid < 1000 {
-		return fmt.Errorf("refusing admin user %q: existing system user (UID %d < 1000)", name, acct.uid)
+	if exists && pw.UID < 1000 {
+		return fmt.Errorf("refusing admin user %q: existing system user (UID %d < 1000)", name, pw.UID)
 	}
 	if !exists {
 		cmd := []string{"useradd", "-m", "-s", "/bin/bash", name}
@@ -90,30 +90,31 @@ func (m *Manager) writeSudoers(name string) error {
 	})
 }
 
-type account struct {
-	uid, gid int
-	home     string
+// PasswdEntry is the part of a passwd entry vpsctl needs.
+type PasswdEntry struct {
+	UID, GID int
+	Home     string
 }
 
-// lookup reads name from the passwd database; exists is false when unknown.
-func (m *Manager) lookup(name string) (acct account, exists bool, err error) {
+// Lookup reads name from the passwd database; exists is false when unknown.
+func (m *Manager) Lookup(name string) (pw PasswdEntry, exists bool, err error) {
 	res, err := m.R.Run("getent", "passwd", name)
 	if err != nil {
-		return acct, false, fmt.Errorf("getent passwd %s: %w", name, err)
+		return pw, false, fmt.Errorf("getent passwd %s: %w", name, err)
 	}
 	if res.Code == 2 {
-		return acct, false, nil
+		return pw, false, nil
 	}
 	f := strings.Split(strings.TrimSpace(res.Stdout), ":")
 	if res.Code != 0 || len(f) < 7 {
-		return acct, false, fmt.Errorf("getent passwd %s: exit %d: %q", name, res.Code, res.Stdout)
+		return pw, false, fmt.Errorf("getent passwd %s: exit %d: %q", name, res.Code, res.Stdout)
 	}
 	uid, err1 := strconv.Atoi(f[2])
 	gid, err2 := strconv.Atoi(f[3])
 	if err1 != nil || err2 != nil {
-		return acct, false, fmt.Errorf("getent passwd %s: bad uid/gid in %q", name, res.Stdout)
+		return pw, false, fmt.Errorf("getent passwd %s: bad uid/gid in %q", name, res.Stdout)
 	}
-	return account{uid, gid, f[5]}, true, nil
+	return PasswdEntry{uid, gid, f[5]}, true, nil
 }
 
 // run runs a command and turns a non-zero exit into an error.

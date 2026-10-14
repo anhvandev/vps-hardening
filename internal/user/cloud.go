@@ -11,14 +11,14 @@ import (
 // authorized_keys, locks the password and sets a nologin shell. Never deletes.
 func (m *Manager) LockDefaultCloudUsers() error {
 	for _, u := range DefaultCloudUsers {
-		acct, exists, err := m.lookup(u)
+		pw, exists, err := m.Lookup(u)
 		if err != nil {
 			return err
 		}
 		if !exists {
 			continue
 		}
-		err = os.Truncate(filepath.Join(m.Root, acct.home, ".ssh", "authorized_keys"), 0)
+		err = os.Truncate(filepath.Join(m.Root, pw.Home, ".ssh", "authorized_keys"), 0)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
