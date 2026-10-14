@@ -1,6 +1,8 @@
 package user
 
 import (
+	"errors"
+	"io"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -111,6 +113,125 @@ func TestSudoInstalledBeforeAnySudoersFileIsWritten(t *testing.T) {
 		t.Fatalf("sudoers content: %q", got)
 	}
 }
+
+func assertEmptyDir(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("%s not cleaned up: %v", dir, entries)
+	}
+}
+
+func TestInstallKeyWritesKeyOutAndInstallsPubkey(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("alice", os.Getuid())
+	m := newManager(h, "rhel")
+	m.Host.SELinux = true
+	keyOut := filepath.Join(t.TempDir(), "alice.key")
+
+	if err := m.InstallKey("alice", keyOut, false); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(keyOut); string(b) != "PRIVATE KEY\n" {
+		t.Fatalf("key-out = %q", b)
+	}
+	if fi, _ := os.Stat(keyOut); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("key-out mode %v", fi.Mode().Perm())
+	}
+	ak := filepath.Join(h.root, "home/alice/.ssh/authorized_keys")
+	if b, _ := os.ReadFile(ak); string(b) != "ssh-ed25519 AAAA vpsctl\n" {
+		t.Fatalf("authorized_keys = %q", b)
+	}
+	if fi, _ := os.Stat(ak); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("authorized_keys mode %v", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(filepath.Dir(ak)); fi.Mode().Perm() != 0o700 {
+		t.Fatalf(".ssh mode %v", fi.Mode().Perm())
+	}
+	if !strings.Contains(strings.Join(h.calls, "\n"), "restorecon -R "+filepath.Dir(ak)) {
+		t.Fatalf("no restorecon on SELinux: %q", h.calls)
+	}
+	assertEmptyDir(t, m.TmpDir)
+
+	// Re-run: key was emitted by vpsctl → kept, no new key generated.
+	h.calls = nil
+	if err := m.InstallKey("alice", keyOut, false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(h.calls, "\n"), "ssh-keygen") {
+		t.Fatal("regenerated an already-emitted key")
+	}
+}
+
+func TestInstallKeyRefusesNeverEmittedKeyUnlessRotate(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("alice", os.Getuid())
+	m := newManager(h, "debian")
+	os.MkdirAll(filepath.Join(h.root, "home/alice/.ssh"), 0o700)
+	os.WriteFile(filepath.Join(h.root, "home/alice/.ssh/authorized_keys"), []byte("ssh-ed25519 OLD\n"), 0o600)
+	keyOut := filepath.Join(t.TempDir(), "k")
+
+	err := m.InstallKey("alice", keyOut, false)
+	if err == nil || !strings.Contains(err.Error(), "--rotate-key") {
+		t.Fatalf("err = %v, want refusal mentioning --rotate-key", err)
+	}
+	if err := m.InstallKey("alice", keyOut, true); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(h.root, "home/alice/.ssh/authorized_keys")); string(b) != "ssh-ed25519 AAAA vpsctl\n" {
+		t.Fatalf("rotate did not replace key: %q", b)
+	}
+}
+
+func TestPrivateKeyTempDirRemovedOnEveryFailure(t *testing.T) {
+	cases := map[string]func(h *fakeHost, m *Manager){
+		"ssh-keygen fails": func(h *fakeHost, m *Manager) { h.fail["ssh-keygen"] = true },
+		"restorecon fails": func(h *fakeHost, m *Manager) { m.Host.SELinux = true; h.fail["restorecon"] = true },
+		"tty write fails": func(h *fakeHost, m *Manager) {
+			m.OpenTTY = func() (io.WriteCloser, error) { return failWriter{}, nil }
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newFakeHost(t)
+			h.addUser("alice", os.Getuid())
+			m := newManager(h, "debian")
+			m.OpenTTY = func() (io.WriteCloser, error) { return nopWriteCloser{io.Discard}, nil }
+			setup(h, m)
+			if err := m.InstallKey("alice", "", false); err == nil {
+				t.Fatal("expected error")
+			}
+			assertEmptyDir(t, m.TmpDir)
+		})
+	}
+}
+
+func TestNoControllingTTYTellsToUseKeyOut(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("alice", os.Getuid())
+	m := newManager(h, "debian")
+	m.OpenTTY = func() (io.WriteCloser, error) { return nil, errors.New("open /dev/tty: no such device") }
+
+	err := m.InstallKey("alice", "", false)
+	if err == nil || !strings.Contains(err.Error(), "--key-out") {
+		t.Fatalf("err = %v, want hint to use --key-out", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "home/alice/.ssh/authorized_keys")); err == nil {
+		t.Fatal("key installed although it could not be shown")
+	}
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("write /dev/tty: EIO") }
+func (failWriter) Close() error              { return nil }
 
 func TestEnsureAdminRefusesSystemUsersAndDefaultCloudUsers(t *testing.T) {
 	for _, name := range []string{"daemon", "ubuntu", "ec2-user", "root"} {
