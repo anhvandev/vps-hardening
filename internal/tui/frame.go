@@ -90,10 +90,14 @@ func machineLine(m *harden.Machine) string {
 
 // badge is the Hardening badge at the right of the header.
 func (t Model) badge() string {
-	if t.hardened {
-		return okStyle.Render(glyph("●") + " Hardened")
+	n := fmt.Sprintf(" Hardening %d/%d", t.done, t.chosen)
+	switch {
+	case !t.hardened:
+		return errStyle.Render(glyph("✗") + " NOT HARDENED")
+	case t.done < t.chosen:
+		return warnStyle.Render(glyph("⚠") + n)
 	}
-	return errStyle.Render(glyph("✗") + " NOT HARDENED")
+	return okStyle.Render(glyph("●") + n)
 }
 
 // sideRow is one sidebar line: a group heading or a menu item.
@@ -107,7 +111,7 @@ func sideRows() []sideRow {
 	for _, g := range menu {
 		var its []sideRow
 		for _, title := range g.titles {
-			if _, ok := screens[title]; ok {
+			if shown(title) {
 				its = append(its, sideRow{title, true})
 			}
 		}
@@ -150,10 +154,10 @@ func (t Model) tabBar() string {
 		}
 		var its []string
 		for _, title := range g.titles {
-			switch _, ok := screens[title]; {
+			switch {
 			case title == cur:
 				its = append(its, lipgloss.NewStyle().Bold(true).Foreground(accent).Render(title))
-			case ok:
+			case shown(title):
 				its = append(its, title)
 			}
 		}

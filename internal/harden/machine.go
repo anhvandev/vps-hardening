@@ -185,16 +185,19 @@ Unattended-Upgrade::Automatic-Reboot "false";
 	return fmt.Errorf("not managed for package manager %q", m.Host.PkgManager)
 }
 
-// Sysctl writes the network/kernel hardening drop-in and loads it.
-func (m *Machine) Sysctl() error {
-	if err := m.writeFile("/etc/sysctl.d/90-vpsctl.conf", `# Managed by vpsctl
+// sysctlConf is the network/kernel hardening drop-in.
+const sysctlConf = `# Managed by vpsctl
 net.ipv4.conf.all.accept_redirects = 0
 net.ipv4.conf.all.send_redirects = 0
 net.ipv4.conf.default.accept_source_route = 0
 net.ipv4.tcp_syncookies = 1
 net.ipv6.conf.all.accept_redirects = 0
 kernel.kptr_restrict = 2
-`); err != nil {
+`
+
+// Sysctl writes the network/kernel hardening drop-in and loads it.
+func (m *Machine) Sysctl() error {
+	if err := m.writeFile("/etc/sysctl.d/90-vpsctl.conf", sysctlConf); err != nil {
 		return err
 	}
 	if _, err := m.output("sysctl", "--system"); err != nil {

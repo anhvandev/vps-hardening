@@ -4,15 +4,18 @@
 package harden
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/anhvandev/vpsctl/internal/firewall"
+	"github.com/anhvandev/vpsctl/internal/system"
 )
 
 // Options are the `vpsctl harden` flags.
@@ -82,6 +85,7 @@ type Host interface {
 	Fail2ban(sshPort int) error
 	AutoUpdates() error
 	Sysctl() error
+	SaveRecord(Record) error
 }
 
 // Change is a snapshotted SSH change (*sshd.Change). StageA/StageB restore on
@@ -108,6 +112,20 @@ func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, erro
 	info := func(f string, a ...any) { fmt.Fprintf(out, "[*] "+f+"\n", a...) }
 	warn := func(f string, a ...any) { fmt.Fprintf(out, "[!] "+f+"\n", a...) }
 
+	// The Hardening Record, saved once the run succeeds.
+	rec := Record{Ran: time.Now(), By: cmp.Or(system.SessionUser(), "root"), Admin: o.User, Applied: map[string]time.Time{}}
+	applied := func(ids ...string) {
+		for _, id := range ids {
+			rec.Applied[id] = time.Now()
+		}
+	}
+	for id, skip := range map[string]bool{"firewall": o.SkipFirewall, "fail2ban": o.SkipFail2ban, "updates": o.SkipUpdates, "sysctl": o.SkipSysctl} {
+		if skip {
+			rec.Skipped = append(rec.Skipped, id)
+		}
+	}
+	slices.Sort(rec.Skipped)
+
 	info("ensuring Admin User %q", o.User)
 	if err := h.EnsureAdmin(o.User); err != nil {
 		return err
@@ -115,10 +133,15 @@ func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, erro
 	if err := h.InstallKey(o.User, o.KeyOut, o.RotateKey, !o.Yes); err != nil {
 		return err
 	}
+	applied("admin")
 
 	p, err := ChangeSSH(o, h, out, ask)
 	if err != nil {
 		return err
+	}
+	applied("ssh", "port")
+	if !o.SkipFirewall {
+		applied("firewall")
 	}
 
 	info("locking Default Cloud Users")
@@ -128,6 +151,7 @@ func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, erro
 	if err := h.BlockCloudInitReinjection(); err != nil {
 		return err
 	}
+	applied("cloud-users", "cloud-init")
 
 	// Extras never undo the SSH hardening already applied: warn and go on.
 	extra := func(skip bool, name string, f func() error) {
@@ -137,11 +161,15 @@ func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, erro
 			warn("%s: %v (continuing)", name, err)
 		} else {
 			info("%s configured", name)
+			applied(name)
 		}
 	}
 	extra(o.SkipFail2ban, "fail2ban", func() error { return h.Fail2ban(p.Port) })
 	extra(o.SkipUpdates, "updates", h.AutoUpdates)
 	extra(o.SkipSysctl, "sysctl", h.Sysctl)
+	if err := h.SaveRecord(rec); err != nil {
+		warn("Hardening Record not saved: %v", err)
+	}
 
 	fmt.Fprintf(out, "\n== SUMMARY ==\n  admin user : %s (key-only SSH, NOPASSWD sudo)\n  ssh port   : %d\n"+
 		"  password auth, root login: disabled\n  default cloud users: locked\nLost the key? Re-run with --rotate-key.\n",

@@ -21,12 +21,19 @@ type hardenField struct {
 	on          bool
 }
 
-// hardening is the Hardening wizard: the inputs of `vpsctl harden`, checked
-// by the same harden.ParseFlags, then harden.Run with the Verify Gate dialog
-// and the private key shown raw outside the TUI (rawKeyMachine) or written
-// to the key file.
+// hardening is the Hardening screen. On a machine whose SSH is key-only it
+// is the Hardening Status (hardening_status.go); otherwise the wizard: the
+// inputs of `vpsctl harden`, checked by the same harden.ParseFlags, then
+// harden.Run with the Verify Gate dialog and the private key shown raw
+// outside the TUI (rawKeyMachine) or written to the key file.
 type hardening struct {
 	m       *harden.Machine
+	loaded  bool           // the Hardening Status was read
+	steps   []harden.Step  // the Hardening Status
+	rec     *harden.Record // nil without a Hardening Record
+	hst     bool           // the Hardening Status shows, not the wizard
+	table   table
+	w, ht   int
 	fields  []hardenField
 	cursor  int
 	running bool
@@ -35,7 +42,7 @@ type hardening struct {
 }
 
 func newHardening(m *harden.Machine) tea.Model {
-	return hardening{m: m, fields: []hardenField{
+	return hardening{m: m, table: newTable("STEP", "STATE", ""), fields: []hardenField{
 		{label: "Admin user", flag: "--user"},
 		{label: "SSH port (blank = keep current)", flag: "--port"},
 		{label: "Key file, mode 600 (blank = show on screen)", flag: "--key-out"},
@@ -47,11 +54,31 @@ func newHardening(m *harden.Machine) tea.Model {
 	}}
 }
 
-func (h hardening) Init() tea.Cmd { return nil }
+func (h hardening) Init() tea.Cmd {
+	return func() tea.Msg {
+		rec, _ := harden.LoadRecord(h.m.Root) // unreadable = none: live checks still tell Done/Missing
+		return hardeningMsg{h.m.Status(rec), rec}
+	}
+}
 
 func (h hardening) busy() bool { return h.running }
 
 func (h hardening) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case hardeningMsg:
+		h.loaded, h.steps, h.rec = true, msg.steps, msg.rec
+		h.hst = msg.steps[1].State == harden.Done // key-only SSH
+		h.table.setRows(h.rows())
+		return h, nil
+	case taskDoneMsg:
+		return h, h.Init()
+	case tea.WindowSizeMsg:
+		h.w, h.ht = msg.Width, msg.Height
+		return h, nil
+	}
+	if h.hst {
+		return h.statusUpdate(msg)
+	}
 	switch msg := msg.(type) {
 	case gateMsg:
 		if msg.ask != nil {
@@ -137,6 +164,12 @@ func (h hardening) start() (tea.Model, tea.Cmd) {
 }
 
 func (h hardening) View() tea.View {
+	switch {
+	case !h.loaded:
+		return tea.NewView(titleStyle.Render("Hardening") + "\n\nloading…")
+	case h.hst:
+		return tea.NewView(h.layout().Render())
+	}
 	if h.gate != nil {
 		return tea.NewView(h.gate.View())
 	}
