@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/service"
 	"github.com/anhvandev/vpsctl/internal/system"
@@ -85,6 +87,44 @@ func TestServicesCreateRefusesExistingName(t *testing.T) {
 
 	s = keys(s, "up", "up", "backspace", "backspace", "backspace", "backspace", "backspace", "myapp", "enter")
 	wantAll(t, view(s), "created myapp.service")
+}
+
+// Advanced opens the generated unit in $EDITOR and creates what was saved; a
+// unit failing verify leaves nothing behind and esc returns to the form.
+func TestServicesCreateAdvancedInEditor(t *testing.T) {
+	h := createHost(t)
+	h.fake.Results["systemd-analyze verify myapp.service"] = system.Result{Code: 1, Stderr: "myapp.service: Unknown key name 'Nise'\n"}
+	fakeEditor(t, `[Service]\nExecStart=/opt/app/run\nNise=5\n`)
+	tm := openServices(t, h)
+	tm.Type("nmyapp")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	tm.Type("/opt/app/run")
+	tm.Send(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	waitFor(t, tm, "enter re-edit · esc discard")
+	if _, err := os.Stat(service.UnitPath(h.root, "myapp.service")); !os.IsNotExist(err) {
+		t.Errorf("invalid unit left behind: %v", err)
+	}
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "discarded edit of myapp.service")
+
+	h.fake.Results["systemd-analyze verify myapp.service"] = system.Result{}
+	fakeEditor(t, `[Service]\nExecStart=/opt/app/run\nNice=5\n`)
+	tm.Send(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl}) // the form is still filled in
+	waitFor(t, tm, "enable and start myapp.service now? y/n")
+	tm.Type("n")
+	waitFor(t, tm, "not enabled or started")
+	closeServices(t, tm)
+	if got := readFile(t, service.UnitPath(h.root, "myapp.service")); got != "[Service]\nExecStart=/opt/app/run\nNice=5\n" {
+		t.Errorf("unit = %q", got)
+	}
+	if lockBusy(h) {
+		t.Error("global lock still held")
+	}
+	log := h.actionLog()
+	if !strings.Contains(log, "service create myapp.service: failed: ") || !strings.Contains(log, "service create myapp.service: ok") {
+		t.Errorf("action log:\n%s", log)
+	}
 }
 
 func TestServicesCreateRefusedWhileLocked(t *testing.T) {

@@ -37,14 +37,14 @@ func TestSpecRendersServiceUnit(t *testing.T) {
 func TestSpecRejectsInvalidFields(t *testing.T) {
 	ok := service.Spec{Name: "myapp", Command: "/opt/app", User: "alice", Restart: "on-failure"}
 	for want, change := range map[string]func(*service.Spec){
-		"invalid name":           func(s *service.Spec) { s.Name = "" },
+		"invalid name":            func(s *service.Spec) { s.Name = "" },
 		"invalid name \"my app\"": func(s *service.Spec) { s.Name = "my app" },
 		"invalid name \"a@\"":     func(s *service.Spec) { s.Name = "a@" },
 		"invalid name \"../x\"":   func(s *service.Spec) { s.Name = "../x" },
-		"command is required":    func(s *service.Spec) { s.Command = " " },
-		"user is required":       func(s *service.Spec) { s.User = "" },
-		"invalid restart policy": func(s *service.Spec) { s.Restart = "sometimes" },
-		"line breaks":            func(s *service.Spec) { s.Environment = "A=1\nExecStartPre=/bin/evil" },
+		"command is required":     func(s *service.Spec) { s.Command = " " },
+		"user is required":        func(s *service.Spec) { s.User = "" },
+		"invalid restart policy":  func(s *service.Spec) { s.Restart = "sometimes" },
+		"line breaks":             func(s *service.Spec) { s.Environment = "A=1\nExecStartPre=/bin/evil" },
 	} {
 		s := ok
 		change(&s)

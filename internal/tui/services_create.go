@@ -91,6 +91,24 @@ func (s servicesScreen) formKey(msg tea.KeyPressMsg) (_ servicesScreen, _ tea.Cm
 			return s, nil, true
 		}
 		return s, s.create(unit, content), true
+	case "ctrl+e": // Advanced: the generated unit in $EDITOR, created once saved
+		unit, content, err := f.spec().Unit()
+		if err != nil {
+			s.status = err.Error()
+			return s, nil, true
+		}
+		e, err := newUnitEdit(s.m.Root, unit, service.UnitPath(s.m.Root, unit), string(content))
+		if err == nil {
+			if err = service.CheckNew(s.m.R, s.m.Root, unit); err != nil {
+				e.close()
+			}
+		}
+		if err != nil {
+			s.status = err.Error()
+			return s, nil, true
+		}
+		e.create, s.edit = true, e
+		return s, e.open(), true
 	default:
 		f.values[f.field] += msg.Text
 	}
@@ -159,6 +177,6 @@ func (f *serviceForm) view() string {
 		fmt.Fprintf(&b, "%s%-18s %s%s\n", mark, label, f.values[i], cursor)
 	}
 	b.WriteString("\n" + dimStyle.Render("restart: "+strings.Join(service.RestartPolicies, ", ")+" · user root only if typed explicitly") + "\n")
-	b.WriteString(dimStyle.Render("tab/↑/↓ field · enter create · esc cancel") + "\n")
+	b.WriteString(dimStyle.Render("tab/↑/↓ field · enter create · ctrl+e advanced ($EDITOR) · esc cancel") + "\n")
 	return b.String()
 }
