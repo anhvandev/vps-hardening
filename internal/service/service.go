@@ -73,9 +73,14 @@ func Do(r system.Runner, verb, unit string) error {
 
 // systemctl runs systemctl args, returning stdout or an error carrying stderr.
 func systemctl(r system.Runner, args ...string) (string, error) {
-	res, err := r.Run("systemctl", args...)
+	return run(r, "systemctl", args...)
+}
+
+// run runs name args, returning stdout or an error carrying stderr.
+func run(r system.Runner, name string, args ...string) (string, error) {
+	res, err := r.Run(name, args...)
 	if err == nil && res.Code != 0 {
-		err = fmt.Errorf("systemctl %s: exit %d: %s", strings.Join(args, " "), res.Code, strings.TrimSpace(res.Stderr))
+		err = fmt.Errorf("%s %s: exit %d: %s", name, strings.Join(args, " "), res.Code, strings.TrimSpace(res.Stderr))
 	}
 	return res.Stdout, err
 }
