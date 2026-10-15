@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
+	"github.com/anhvandev/vpsctl/internal/logins"
 	"github.com/anhvandev/vpsctl/internal/system"
 	"github.com/anhvandev/vpsctl/internal/user"
 )
@@ -31,7 +33,8 @@ func init() { screens["Users"] = newUsers }
 type users struct {
 	m        *harden.Machine
 	list     []user.ManagedUser
-	authKeys [][]string // each user's key lines; nil when unreadable
+	authKeys [][]string           // each user's key lines; nil when unreadable
+	last     map[string]time.Time // newest SSH login per user in the last 7 days
 	err      error
 	loaded   bool
 	table    table
@@ -47,11 +50,12 @@ type users struct {
 type usersMsg struct {
 	list []user.ManagedUser
 	keys [][]string
+	last map[string]time.Time
 	err  error
 }
 
 func newUsers(m *harden.Machine) tea.Model {
-	return users{m: m, table: newTable("USER", "SUDO", "KEYS", "STATE", "")}
+	return users{m: m, table: newTable("USER", "SUDO", "KEYS", "STATE", "LAST LOGIN", "")}
 }
 
 // Init re-reads the Managed Users and their keys.
@@ -63,7 +67,14 @@ func (u users) Init() tea.Cmd {
 			k, _ := u.m.Keys(mu.Name)
 			keys = append(keys, k)
 		}
-		return usersMsg{list, keys, err}
+		last := map[string]time.Time{}
+		ls, _ := logins.Read(u.m.R, u.m.Root, logins.Week, time.Now()) // unreadable: every LAST LOGIN "—"
+		for _, l := range ls {
+			if l.OK && l.Time.After(last[l.User]) {
+				last[l.User] = l.Time
+			}
+		}
+		return usersMsg{list, keys, last, err}
 	}
 }
 
@@ -75,7 +86,7 @@ func (u users) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		u.table.setRows(u.table.rows)
 		return u, nil
 	case usersMsg:
-		u.list, u.authKeys, u.err, u.loaded = msg.list, msg.keys, msg.err, true
+		u.list, u.authKeys, u.last, u.err, u.loaded = msg.list, msg.keys, msg.last, msg.err, true
 		u.table.setRows(u.rows())
 		return u, nil
 	case taskDoneMsg:
@@ -326,7 +337,11 @@ func (u users) rows() [][]string {
 		if len(u.guardNotes(mu)) > 0 {
 			note = glyph("◆")
 		}
-		rows = append(rows, []string{name, sudo, strconv.Itoa(mu.Keys), state, note})
+		login := "—"
+		if t, ok := u.last[mu.Name]; ok {
+			login = span(time.Since(t)) + " ago"
+		}
+		rows = append(rows, []string{name, sudo, strconv.Itoa(mu.Keys), state, login, note})
 	}
 	return rows
 }

@@ -198,7 +198,7 @@ func TestUsersScreenListsManagedUsers(t *testing.T) {
 	waitFor(t, tm, "q quit")
 	v := quitView(t, tm)
 	wantAll(t, v, "USER", "SUDO", "KEYS", "STATE", "2 Managed Users · 1 with sudo",
-		"alice (you)  ●     2     ● active  ◆",
+		"alice (you)  ●     2     ● active  —           ◆",
 		"bob          ·     0     ⚠ locked")
 	if strings.Contains(v, "daemon") {
 		t.Errorf("system account shown:\n%s", v)
