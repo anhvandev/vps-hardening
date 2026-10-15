@@ -86,6 +86,29 @@ func TestHolderPeeksAtTheLock(t *testing.T) {
 	lk.Close()
 }
 
+// Two Tasks started in the same second keep separate output files, each
+// found again from the time on its Task History line.
+func TestOutputPathFromLineTimeIsPerTask(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "actions.log")
+	at := time.Date(2026, 10, 15, 1, 12, 3, 0, time.Local)
+	AppendAt(p, at.Add(100*time.Millisecond), "first", "ok")
+	AppendAt(p, at.Add(200*time.Millisecond), "second", "ok")
+	b, _ := os.ReadFile(p)
+	var paths []string
+	for _, l := range strings.Split(strings.TrimSuffix(string(b), "\n"), "\n") {
+		ts, _, _ := strings.Cut(l, " ")
+		lt, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, OutputPath(lt))
+	}
+	want := []string{OutputPath(at.Add(100 * time.Millisecond)), OutputPath(at.Add(200 * time.Millisecond))}
+	if len(paths) != 2 || paths[0] != want[0] || paths[1] != want[1] || paths[0] == paths[1] {
+		t.Errorf("output paths %q, want %q, distinct", paths, want)
+	}
+}
+
 func TestLockHolderIsRootWithoutSudoUser(t *testing.T) {
 	t.Setenv("SUDO_USER", "")
 	p := filepath.Join(t.TempDir(), "vpsctl.lock")

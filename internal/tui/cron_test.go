@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/harden"
@@ -53,6 +55,7 @@ func cronHost(t *testing.T) (*testHost, crontabHost) {
 // cronScreenOn opens the Cron screen on h with the fake crontab, loaded.
 func cronScreenOn(h *testHost, c crontabHost) tea.Model {
 	s := screens["Cron"](harden.NewMachine(c, h.host, h.root, io.Discard))
+	s, _ = s.Update(tea.WindowSizeMsg{Width: 92, Height: 36})
 	return pump(s, s.Init()())
 }
 
@@ -102,42 +105,85 @@ func TestCronListsRootAndManagedUsers(t *testing.T) {
 	}
 }
 
-func TestCronAddEditDelete(t *testing.T) {
+// openCron starts the TUI on h, commands going through r, and opens Cron.
+func openCron(t *testing.T, h *testHost, r system.Runner) *teatest.TestModel {
+	t.Helper()
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
+	waitFor(t, tm, "RAM")
+	tm.Type(menuTo("Cron"))
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "ENTRY")
+	return tm
+}
+
+// cronOutputs is every Task output file, joined.
+func cronOutputs(t *testing.T, h *testHost) string { return strings.Join(taskOutputs(t, h), "\n") }
+
+// Adding a Cron Entry runs as a Task; the entry stays out of the Task's
+// output and Task History (it may carry a secret).
+func TestCronAddEntryAsTask(t *testing.T) {
 	h, c := cronHost(t)
-	s := cronScreenOn(h, c)
-
-	// rows: root, root's entry, alice
-	s = keys(s, "down", "down", "a", "*/5 * * * * /home/alice/poll", "enter")
-	if c.tabs["alice"] != "*/5 * * * * /home/alice/poll\n" {
-		t.Fatalf("alice's crontab = %q", c.tabs["alice"])
+	tm := openCron(t, h, c)
+	tm.Type("j") // rows: root's entry, alice (no entries)
+	tm.Type("a*/5 * * * * /home/alice/poll?token=s3cret")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "SUMMARY  added a Cron Entry for alice")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // close the card
+	v := ctrlCView(t, tm)
+	if !lineHas(v, "alice", "*/5 * * * * /home/alice/poll?token=s3cret") {
+		t.Errorf("added entry not listed:\n%s", v)
 	}
-	wantAll(t, view(s), "*/5 * * * * /home/alice/poll")
+	if c.tabs["alice"] != "*/5 * * * * /home/alice/poll?token=s3cret\n" {
+		t.Errorf("alice's crontab = %q", c.tabs["alice"])
+	}
+	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.HasSuffix(log, "cron add alice: ok\n") {
+		t.Errorf("Task History:\n%s", log)
+	}
+	if out := cronOutputs(t, h); strings.Contains(out, "s3cret") || !strings.Contains(out, "Done: ") {
+		t.Errorf("Task output:\n%s", out)
+	}
+}
 
-	s = keys(s, "up", "e", " --fulll", "backspace", "enter")
+// Editing runs as a Task whose output holds none of the crontab.
+func TestCronEditEntry(t *testing.T) {
+	h, c := cronHost(t)
+	tm := openCron(t, h, c) // first row: root's backup entry
+	tm.Type("e --fulll")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "SUMMARY  edited a Cron Entry of root")
+	ctrlCView(t, tm)
 	if want := "# nightly\nMAILTO=ops@example.com\n0 3 * * * /usr/local/bin/backup --full\n"; c.tabs["root"] != want {
-		t.Fatalf("root's crontab = %q, want %q", c.tabs["root"], want)
+		t.Errorf("root's crontab = %q, want %q", c.tabs["root"], want)
 	}
+	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.HasSuffix(log, "cron edit root: ok\n") {
+		t.Errorf("Task History:\n%s", log)
+	}
+	if out := cronOutputs(t, h); strings.Contains(out, "backup") || strings.Contains(out, "MAILTO") {
+		t.Errorf("Task output leaks the crontab:\n%s", out)
+	}
+}
 
-	s = keys(s, "d", "n")
-	if !strings.Contains(c.tabs["root"], "backup --full") {
-		t.Fatal("deleted without confirmation")
+// Deleting asks Yes/No first; No changes nothing, Yes deletes as a Task.
+func TestCronDeleteAsksFirst(t *testing.T) {
+	h, c := cronHost(t)
+	tm := openCron(t, h, c)
+	tm.Type("d")
+	waitFor(t, tm, "Delete this Cron Entry of root?")
+	tm.Type("n")
+	tm.Type("d")
+	tm.Type("y")
+	waitFor(t, tm, "SUMMARY  deleted a Cron Entry of root")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	v := ctrlCView(t, tm)
+	if strings.Contains(v, "backup") {
+		t.Errorf("deleted entry still listed:\n%s", v)
 	}
-	s = keys(s, "d", "y")
 	if c.tabs["root"] != "# nightly\nMAILTO=ops@example.com\n" {
-		t.Fatalf("root's crontab after delete = %q", c.tabs["root"])
+		t.Errorf("root's crontab = %q", c.tabs["root"])
 	}
-	if strings.Contains(view(s), "backup") {
-		t.Errorf("deleted entry still listed:\n%s", view(s))
-	}
-
-	log := actionLog(t, h)
-	for _, want := range []string{"cron add alice: ok", "cron edit root: ok", "cron delete root: ok"} {
-		if !strings.Contains(log, want) {
-			t.Errorf("action log missing %q:\n%s", want, log)
-		}
-	}
-	if n := strings.Count(log, "\n"); n != 3 {
-		t.Errorf("action log has %d lines, want 3:\n%s", n, log)
+	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.HasSuffix(log, "cron delete root: ok\n") {
+		t.Errorf("Task History:\n%s", log)
 	}
 }
 
@@ -171,15 +217,20 @@ func (r rejectInstall) Run(name string, args ...string) (system.Result, error) {
 	return r.crontabHost.Run(name, args...)
 }
 
-// A failed save shows the error but logs a bare "failed": the error may echo
-// a Cron Entry's secrets.
+// A failed save shows the error on the Failed card only: Task History and
+// the output get a bare "failed", as the error may echo a Cron Entry's secrets.
 func TestCronFailedSaveKeepsEntryOutOfLog(t *testing.T) {
 	h, c := cronHost(t)
-	s := screens["Cron"](harden.NewMachine(rejectInstall{c}, h.host, h.root, io.Discard))
-	s = keys(pump(s, s.Init()()), "a", "@daily curl -H TOKEN=hunter2 x", "enter")
-	wantAll(t, view(s), "bad line")
+	tm := openCron(t, h, rejectInstall{c})
+	tm.Type("a@daily curl -H TOKEN=hunter2 x")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "bad line")
+	wantAll(t, ctrlCView(t, tm), "Failed")
 	if log := actionLog(t, h); strings.Contains(log, "hunter2") || !strings.HasSuffix(log, "cron add root: failed\n") {
-		t.Errorf("action log:\n%s", log)
+		t.Errorf("Task History:\n%s", log)
+	}
+	if out := cronOutputs(t, h); strings.Contains(out, "hunter2") {
+		t.Errorf("Task output leaks the entry:\n%s", out)
 	}
 }
 
@@ -190,8 +241,11 @@ func TestCronLockBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lk.Close()
-	s := keys(cronScreenOn(h, c), "a", "@daily /bin/true", "enter")
-	wantAll(t, view(s), "locked by")
+	tm := openCron(t, h, c)
+	tm.Type("a@daily /bin/true")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "refused: locked by")
+	ctrlCView(t, tm)
 	if strings.Contains(c.tabs["root"], "/bin/true") {
 		t.Error("crontab written without the lock")
 	}
