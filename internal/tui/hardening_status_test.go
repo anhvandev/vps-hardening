@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 
+	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
 )
 
@@ -113,4 +117,49 @@ func TestBadgeGreenWithOnlySkippedSteps(t *testing.T) {
 	tm := startSized(h, 120, 40)
 	waitFor(t, tm, "5432/tcp")
 	wantAll(t, quitView(t, tm), "● Hardening 8/8")
+}
+
+// f2bInstall is h's fake where restarting fail2ban brings up the sshd jail.
+type f2bInstall struct{ *system.Fake }
+
+func (f f2bInstall) Run(name string, args ...string) (system.Result, error) {
+	if name == "systemctl" && strings.Join(args, " ") == "restart fail2ban" {
+		f.Results["fail2ban-client status"] = system.Result{Stdout: "Status\n|- Number of jail:\t1\n`- Jail list:\tsshd\n"}
+	}
+	return f.Fake.Run(name, args...)
+}
+
+// A Skipped step applied from the Hardening Status runs as a Task, changes
+// only that step, and is no longer Skipped: the Record says it was applied.
+func TestHardeningStatusApplySkippedStep(t *testing.T) {
+	h := hardenedHost(t)
+	h.write("/run/.keep", "")
+	h.fake.Results["fail2ban-client status"] = system.Result{Code: 255}
+	h.fake.Results["fail2ban-client --version"] = system.Result{Stdout: "Fail2Ban v1.0.2\n"}
+	h.fake.Results["systemctl enable fail2ban"] = system.Result{}
+	h.fake.Results["systemctl restart fail2ban"] = system.Result{}
+	h.write("/var/lib/vpsctl/hardening.json", `{"ran":"2026-10-15T01:12:00Z","by":"root","admin_user":"anh","skipped":["fail2ban"]}`)
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(f2bInstall{h.fake}, h.host, h.root, io.Discard), time.Now()),
+		teatest.WithInitialTermSize(120, 40))
+	waitFor(t, tm, "5432/tcp")
+	tm.Type(menuTo("Hardening"))
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "[ Apply ]")
+	tm.Type("jjjjjj") // to the fail2ban row
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "SUMMARY  fail2ban applied")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // close the result card
+	waitFor(t, tm, "r refresh")                  // the screen's keys again
+	v := ctrlCView(t, tm)
+
+	if !lineHas(v, "fail2ban", "● Done", "sshd jail") || strings.Contains(v, "Skipped") {
+		t.Errorf("fail2ban not Done:\n%s", v)
+	}
+	rec, err := harden.LoadRecord(h.root)
+	if err != nil || rec == nil || len(rec.Skipped) != 0 || rec.Applied["fail2ban"].IsZero() || len(rec.Applied) != 1 || rec.Admin != "anh" {
+		t.Errorf("record = %+v, %v", rec, err)
+	}
+	if out := oneOutput(t, h); !strings.Contains(out, "systemctl restart fail2ban") || strings.Contains(out, "sysctl") {
+		t.Errorf("Task output:\n%s", out)
+	}
 }
