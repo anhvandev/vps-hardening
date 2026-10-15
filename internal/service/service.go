@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/system"
@@ -61,6 +63,52 @@ func List(r system.Runner) ([]Service, error) {
 		}
 	}
 	slices.SortFunc(list, func(a, b Service) int { return strings.Compare(a.Name, b.Name) })
+	return list, nil
+}
+
+// Status is what systemd knows of a Service's current run.
+type Status struct {
+	Since  time.Time // when it entered its state; zero if unknown
+	Result string    // how it last ended: success, exit-code, signal, timeout, ...
+	Exit   string    // ExecMainStatus: the exit code (or signal number)
+	Mem    uint64    // bytes; 0 if unknown
+	PID    int       // main PID; 0 if none
+}
+
+// Show reads the Status of units in one `systemctl show`, in units' order.
+func Show(r system.Runner, units []string) ([]Status, error) {
+	out, err := systemctl(r, append([]string{"show", "-p", "Id,StateChangeTimestamp,Result,ExecMainStatus,MemoryCurrent,MainPID"}, units...)...)
+	if err != nil {
+		return nil, err
+	}
+	var list []Status
+	for _, line := range strings.Split(out, "\n") {
+		k, v, _ := strings.Cut(line, "=")
+		if k == "Id" { // each unit's properties start with its Id
+			list = append(list, Status{})
+		}
+		if len(list) == 0 {
+			continue
+		}
+		s := &list[len(list)-1]
+		switch k {
+		case "StateChangeTimestamp":
+			s.Since, _ = time.ParseInLocation("Mon 2006-01-02 15:04:05 MST", v, time.Local)
+		case "Result":
+			s.Result = v
+		case "ExecMainStatus":
+			s.Exit = v
+		case "MemoryCurrent":
+			if n, err := strconv.ParseUint(v, 10, 64); err == nil && n != math.MaxUint64 { // max: not accounted
+				s.Mem = n
+			}
+		case "MainPID":
+			s.PID, _ = strconv.Atoi(v)
+		}
+	}
+	if len(list) != len(units) {
+		return nil, fmt.Errorf("systemctl show: %d units read, want %d", len(list), len(units))
+	}
 	return list, nil
 }
 

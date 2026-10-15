@@ -2,212 +2,234 @@ package tui
 
 import (
 	"cmp"
-	"fmt"
+	"io"
 	"slices"
-	"strings"
-	"text/tabwriter"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/service"
+	"github.com/anhvandev/vpsctl/internal/system"
 )
 
 func init() { screens["Timers"] = newTimers }
 
 // timersScreen lists Timers read live, with their next run and target Service.
-// n opens the new-Timer form (created, enabled and started on enter); E edits
+// a opens the new-Timer form (created, enabled and started as a Task); e edits
 // the selected Timer's override in $EDITOR, U reverts it (unit_edit.go).
 type timersScreen struct {
 	m      *harden.Machine
 	loaded bool
 	list   []service.Timer
 	err    error // list unreadable
-	cursor int
+	table  table
 	status string
-	form   []string  // new-Timer form values (timerFields), nil if closed
-	field  int       // form field being typed into
+	form   *form     // new-Timer form, nil if closed
 	edit   *unitEdit // override being edited, nil if none
+	await  *awaited  // the create Task, until it ends
+	asking bool      // the revert confirm is up
+	ask    confirm
+	pick   string // Timer to select once the list is re-read
+	w, h   int
 }
 
-// timerFields are the new-Timer form's labels, in service.TimerSpec order.
-var timerFields = []string{"Name", "Schedule", "Service"}
-
-// timersMsg is one read of the Timers, plus the outcome of the last action.
+// timersMsg is one read of the Timers.
 type timersMsg struct {
-	list   []service.Timer
-	err    error
-	status string
+	list []service.Timer
+	err  error
 }
 
-// timerCreatedMsg is a create finishing; unit is "" if nothing was created
-// (the form stays open).
-type timerCreatedMsg struct {
-	timersMsg
-	unit string
+// timerInvalidMsg is the new-Timer form failing validation.
+type timerInvalidMsg string
+
+func newTimers(m *harden.Machine) tea.Model {
+	return timersScreen{m: m, table: newTable("TIMER", "NEXT RUN", "SERVICE")}
 }
 
-func newTimers(m *harden.Machine) tea.Model { return timersScreen{m: m} }
-
-func (s timersScreen) Init() tea.Cmd { return s.reload("") }
-
-func (s timersScreen) reload(status string) tea.Cmd {
+func (s timersScreen) Init() tea.Cmd {
 	return func() tea.Msg {
 		list, err := service.ListTimers(s.m.R)
-		return timersMsg{list, err, status}
+		return timersMsg{list, err}
 	}
+}
+
+func (s timersScreen) flow() overrideFlow {
+	return overrideFlow{s.m, "timer", "# An empty OnCalendar= first clears the vendor schedule.\n[Timer]\n"}
+}
+
+func (s timersScreen) selected() string {
+	if i := s.table.selected(); i >= 0 {
+		return s.list[i].Name
+	}
+	return ""
 }
 
 func (s timersScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if s, cmd, ok := s.editUpdate(msg); ok {
-		return s, cmd
-	}
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		s.w, s.h = msg.Width, msg.Height
+		s.table.height = max(s.h-14, 3)
+		s.table.setRows(s.table.rows)
+		return s, nil
+	case openMsg: // Overview links to a Timer that missed its run
+		s.pick = msg.item
+		return s, nil
 	case timersMsg:
-		s.list, s.err, s.status, s.loaded = msg.list, msg.err, msg.status, true
-		s.cursor = max(min(s.cursor, len(s.list)-1), 0)
-	case timerCreatedMsg:
-		s.list, s.err, s.status = msg.list, msg.err, msg.status
-		if msg.unit != "" {
+		s.list, s.err, s.loaded = msg.list, msg.err, true
+		var rows [][]string
+		for _, t := range s.list {
+			rows = append(rows, []string{t.Name, cmp.Or(t.Next, "—"), cmp.Or(t.Service, "—")})
+		}
+		s.table.setRows(rows)
+		if i := slices.IndexFunc(s.list, func(t service.Timer) bool { return t.Name == s.pick }); i >= 0 {
+			s.table.filter.Reset()
+			s.table.cursor, s.pick = i, ""
+			s.table.setRows(rows)
+		}
+		return s, nil
+	case timerInvalidMsg:
+		if s.form != nil {
+			s.form.err = string(msg)
+		}
+		s.await = nil
+		return s, nil
+	case taskDoneMsg:
+		s.flow().done(&s.edit, &s.status)
+		if a := s.await; a != nil {
+			s.await = nil
+			if a.ok.Load() {
+				s.form, s.pick = nil, a.unit
+			}
+		}
+		return s, s.Init()
+	case tea.MouseClickMsg:
+		if m := mouse(s.layout(), msg); m != nil {
+			return s.Update(m)
+		}
+		return s, nil
+	}
+	if !s.table.typing() {
+		if cmd, ok := s.flow().update(&s.edit, &s.status, msg); ok {
+			return s, cmd
+		}
+	}
+	switch {
+	case s.form != nil:
+		f, ev := s.form.update(msg)
+		s.form = &f
+		switch ev {
+		case cancelled:
 			s.form = nil
-			s.cursor = max(slices.IndexFunc(s.list, func(t service.Timer) bool { return t.Name == msg.unit }), 0)
+		case submitted:
+			s.await = &awaited{what: "create"}
+			return s, s.create(service.TimerSpec{Name: f.value(0), Schedule: f.value(1), Service: f.value(2)}, s.await)
 		}
-	case tea.KeyPressMsg:
-		if s.form != nil {
-			return s.formKey(msg)
+		return s, nil
+	case s.asking:
+		c, ev := s.ask.update(msg)
+		s.ask, s.asking = c, ev == editing
+		if ev == submitted {
+			return s, s.flow().revert(s.selected())
 		}
-		switch msg.String() {
-		case "esc":
-			return s, Back
-		case "up", "k":
-			s.cursor = max(s.cursor-1, 0)
-		case "down", "j":
-			s.cursor = max(min(s.cursor+1, len(s.list)-1), 0)
-		case "n":
-			s.form, s.field, s.status = make([]string, len(timerFields)), 0, ""
-		}
+		return s, nil
 	}
-	return s, nil
-}
-
-// editUpdate runs the override edit/revert flow (unit_edit.go); ok is false
-// for anything else.
-func (s timersScreen) editUpdate(msg tea.Msg) (_ timersScreen, _ tea.Cmd, ok bool) {
-	switch msg := msg.(type) {
-	case appliedMsg:
-		r, ok := msg.reloaded.(timersMsg)
-		if !ok || s.edit == nil {
-			return s, nil, false
-		}
-		s.list, s.err, s.status = r.list, r.err, r.status
-		if msg.ok {
-			s.edit.close()
-			s.edit = nil
-		} else {
-			s.edit.failed = true
-		}
-		return s, nil, true
-	case tea.KeyPressMsg:
-		if s.form != nil {
-			return s, nil, false
-		}
+	if t, ok := s.table.update(msg); ok {
+		s.table = t
+		return s, nil
 	}
-	unit := ""
-	if s.cursor < len(s.list) {
-		unit = s.list[s.cursor].Name
+	k, ok := msg.(tea.KeyPressMsg)
+	if !ok || disabled(s.buttons(), k.String()) {
+		return s, nil
 	}
-	flow := overrideFlow{s.m, "timer", "# An empty OnCalendar= first clears the vendor schedule.\n[Timer]\n", s.reload}
-	cmd, ok := flow.update(&s.edit, &s.status, msg, unit)
-	return s, cmd, ok
-}
-
-func (s timersScreen) formKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	switch k.String() {
 	case "esc":
-		s.form, s.status = nil, ""
-	case "tab", "down":
-		s.field = (s.field + 1) % len(s.form)
-	case "shift+tab", "up":
-		s.field = (s.field + len(s.form) - 1) % len(s.form)
-	case "backspace":
-		s.form[s.field] = dropLast(s.form[s.field])
-	case "enter":
-		return s, s.create(service.TimerSpec{Name: s.form[0], Schedule: s.form[1], Service: s.form[2]})
-	default:
-		s.form[s.field] += msg.Text
+		return s, Back
+	case "a":
+		f := newForm("New Timer", "Name", "Schedule", "Service")
+		f.inputs[1].Placeholder = "daily, Mon *-*-* 03:00, *:0/15"
+		s.form, s.status = &f, ""
+	case "e":
+		return s, s.flow().start(&s.edit, &s.status, s.selected())
+	case "U":
+		s.asking, s.ask = true, newConfirm("Revert "+s.selected()+" override?")
 	}
 	return s, nil
 }
 
 // create validates spec (a bad schedule or Service writes nothing and is not
-// logged), then creates the Timer and enables and starts it, each under
-// logMutation, and reports its next run.
-func (s timersScreen) create(spec service.TimerSpec) tea.Cmd {
+// logged), then creates, enables and starts the Timer as a Task.
+// a.ok is set once the Timer is created.
+func (s timersScreen) create(spec service.TimerSpec, a *awaited) tea.Cmd {
 	r, root := s.m.R, s.m.Root
 	return func() tea.Msg {
 		unit, content, err := spec.Unit(r)
 		if err != nil {
-			return timerCreatedMsg{timersMsg{s.list, s.err, err.Error()}, ""}
+			return timerInvalidMsg(err.Error())
 		}
-		err = logMutation(root, "timer create "+unit, func() error { return service.Create(r, root, unit, content) })
-		created := err == nil
-		if created {
-			err = logMutation(root, "timer enable+start "+unit, func() error { return service.EnableStart(r, unit) })
-		}
-		list, lerr := service.ListTimers(r)
-		status := "created " + unit + ", next run "
-		for _, t := range list {
-			if t.Name == unit {
-				status += cmp.Or(t.Next, "none")
-			}
-		}
-		if err != nil {
-			status = err.Error()
-		}
-		if !created {
-			unit = ""
-		}
-		return timerCreatedMsg{timersMsg{list, lerr, status}, unit}
+		a.unit = unit
+		return runTask("Create "+unit, "timer create "+unit, "created "+unit+", enabled and started",
+			a.marks(taskStep{"Verify and load " + unit, func(r system.Runner, _ io.Writer) error {
+				return service.Create(r, root, unit, content)
+			}}),
+			unitStep("enable", unit), unitStep("start", unit))()
 	}
 }
 
-func (s timersScreen) View() tea.View {
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Timers") + "\n\n")
+func (s timersScreen) typing() bool {
+	return s.form != nil || s.table.typing()
+}
+
+func (s timersScreen) notice() string { return s.status }
+
+func (s timersScreen) keys() string {
+	switch {
+	case s.edit != nil && s.edit.failed:
+		return "enter re-edit · esc discard"
+	case s.form != nil:
+		return s.form.keys()
+	case s.asking:
+		return s.ask.keys()
+	case s.table.typing():
+		return s.table.keys()
+	}
+	return s.table.keys() + " · " + keyHelp(s.buttons()) + " · esc back"
+}
+
+func (s timersScreen) buttons() []button {
+	unit := s.selected()
+	edit := button{"e", "Edit", refusal(unit, "edit")}
+	revert := button{"U", "Revert", edit.why}
+	switch {
+	case unit == "":
+		edit.why, revert.why = "no Timer selected", "no Timer selected"
+	case revert.why == "" && !hasOverride(s.m.Root, unit):
+		revert.why = "no override to revert"
+	}
+	return []button{edit, revert, {"a", "+ New", ""}}
+}
+
+func (s timersScreen) layout() *lipgloss.Compositor {
+	title := titleStyle.Render("Timers")
 	switch {
 	case !s.loaded:
-		return tea.NewView(b.String() + "loading…")
+		return stack(title, "", "loading…")
 	case s.form != nil:
-		b.WriteString("New Timer\n\n")
-		for i, label := range timerFields {
-			mark, cursor := "  ", ""
-			if i == s.field {
-				mark, cursor = "> ", "█"
-			}
-			fmt.Fprintf(&b, "%s%-10s %s%s\n", mark, label, s.form[i], cursor)
-		}
-		b.WriteString("\n" + dimStyle.Render("schedule: systemd calendar syntax, e.g. daily, Mon *-*-* 03:00, *:0/15") + "\n")
-		b.WriteString(dimStyle.Render("tab/↑/↓ field · enter create · esc cancel") + "\n\n" + s.status)
-		return tea.NewView(strings.TrimRight(b.String(), "\n"))
-	case s.err != nil:
-		b.WriteString("Timers unreadable: " + s.err.Error())
-	case len(s.list) == 0:
-		b.WriteString("no Timers")
-	default:
-		var table strings.Builder
-		tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "Timer\tNext run\tService")
-		for _, t := range s.list {
-			fmt.Fprintf(tw, "%s\t%s\t%s\n", t.Name, cmp.Or(t.Next, "-"), cmp.Or(t.Service, "-"))
-		}
-		tw.Flush()
-		lines := strings.Split(table.String(), "\n")
-		lines[s.cursor+1] = selectedStyle.Render(lines[s.cursor+1])
-		b.WriteString(strings.Join(lines, "\n"))
+		hint := dimStyle.Render("schedule: systemd calendar syntax, e.g. daily, Mon *-*-* 03:00, *:0/15")
+		return stack(title, "", s.form.view(), "", hint)
 	}
-	b.WriteString("\n\n" + dimStyle.Render("↑/↓ move · n new · E edit · U revert") + "\n")
-	if s.status != "" {
-		b.WriteString("\n" + s.status)
+	blocks := []any{title}
+	if s.err != nil {
+		blocks = append(blocks, "Timers unreadable: "+s.err.Error())
+	} else {
+		blocks = append(blocks, s.table.layer(s.w))
 	}
-	return tea.NewView(strings.TrimRight(b.String(), "\n"))
+	blocks = append(blocks, buttonRow(s.buttons()...))
+	c := stack(blocks...)
+	if s.asking {
+		c.AddLayers(s.ask.layer(s.w))
+	}
+	return c
 }
+
+func (s timersScreen) View() tea.View { return tea.NewView(s.layout().Render()) }

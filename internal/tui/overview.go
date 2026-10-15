@@ -1,193 +1,169 @@
 package tui
 
 import (
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
-	"github.com/anhvandev/vpsctl/internal/fail2ban"
-	"github.com/anhvandev/vpsctl/internal/firewall"
 	"github.com/anhvandev/vpsctl/internal/harden"
-	"github.com/anhvandev/vpsctl/internal/system"
 )
 
 func init() { screens["Overview"] = newOverview }
 
-// overview is the read-only machine summary. It reads everything live when
-// opened; a missing piece (fail2ban absent, firewall off) is a state, not an error.
+// overview is machine health as four cards (design §1): Security, Resources,
+// Updates and Services, read live when opened and again on every refreshMsg
+// while shown; the shell's tick moves "refreshed Ns ago". A missing piece (fail2ban absent,
+// no updates info) is a state, not an error. Every card and line is a link:
+// a click opens its screen, or the exact item (a failed Service).
 type overview struct {
-	m    *harden.Machine
-	rows []row // nil while loading
+	m       *harden.Machine
+	w       int
+	cards   []card // nil while loading
+	swap    bool   // no swap: offer [ Create swap ]
+	cpu     cpuTimes
+	at, now time.Time // the last read; the shell's clock
+	loading bool
+	pending string    // the Updates card's pending line, as last listed
+	listed  time.Time // when it was listed (shell's clock), zero: never
 }
 
-type row struct{ label, value string }
+// card is a titled box; to is where a click on it leads (title "" = nowhere).
+type card struct {
+	title string
+	to    openMsg
+	lines []cardLine
+}
 
-type overviewMsg []row
+// cardLine is one line of a card; a zero to falls back to the card's.
+type cardLine struct {
+	text string
+	to   openMsg
+}
 
-func newOverview(m *harden.Machine) tea.Model { return overview{m: m} }
+// cpuTimes is /proc/stat's busy and total CPU time; CPU % is the busy share
+// since the previous read (since boot on the first).
+type cpuTimes struct{ busy, total float64 }
 
-func (o overview) Init() tea.Cmd {
+type overviewMsg struct {
+	cards   []card
+	swap    bool
+	cpu     cpuTimes
+	at      time.Time
+	pending string // the pending updates line
+	listed  bool   // pending was listed now
+}
+
+func newOverview(m *harden.Machine) tea.Model { return overview{m: m, loading: true} }
+
+func (o overview) Init() tea.Cmd { return o.load() }
+
+func (o overview) load() tea.Cmd {
+	prev, pending := o.cpu, o.pending
+	if o.listed.IsZero() || o.now.Sub(o.listed) >= updatesEvery {
+		pending = "" // list the updates again
+	}
 	return func() tea.Msg {
-		rows := firewallRows(o.m)
-		rows = append(rows,
-			row{"fail2ban", fail2banState(o.m.R)},
-			row{"Updates", updateState(o.m)},
-			row{"Disk /", diskState(o.m.R)},
-			row{"RAM", ramState(o.m.Root)})
-		return overviewMsg(rows)
+		at := time.Now()
+		res, swapNone, cpu := o.resources(prev)
+		upd, listedNow := o.updates(at, pending)
+		return overviewMsg{[]card{o.security(), res, upd, o.services()}, swapNone, cpu, at, listedNow, pending == ""}
 	}
 }
 
 func (o overview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		o.w = msg.Width
 	case overviewMsg:
-		o.rows = msg
+		o.cards, o.swap, o.cpu, o.at, o.loading, o.pending = msg.cards, msg.swap, msg.cpu, msg.at, false, msg.pending
+		if o.now.Before(o.at) {
+			o.now = o.at
+		}
+		if msg.listed {
+			o.listed = o.now
+		}
+	case tickMsg:
+		if msg.now.After(o.now) { // the clock never runs back
+			o.now = msg.now
+		}
+	case refreshMsg:
+		if !o.loading { // a slow read is not stacked on
+			o.loading = true
+			return o, o.load()
+		}
+	case tea.MouseClickMsg:
+		if m := mouse(o.layout(), msg); m != nil {
+			return o.Update(m)
+		}
+	case rowMsg:
+		c := o.cards[int(msg)/100]
+		to := c.to
+		if i := int(msg)%100 - 1; i >= 0 && c.lines[i].to.title != "" {
+			to = c.lines[i].to
+		}
+		if to.title != "" {
+			return o, func() tea.Msg { return to }
+		}
 	case tea.KeyPressMsg:
-		if msg.String() == "esc" {
+		switch {
+		case msg.String() == "esc":
 			return o, Back
+		case msg.String() == "s" && o.swap:
+			return o, func() tea.Msg { return openMsg{title: "Swap"} }
 		}
 	}
 	return o, nil
 }
 
-func (o overview) View() tea.View {
-	if o.rows == nil {
-		return tea.NewView(titleStyle.Render("Overview") + "\n\nloading…")
+func (o overview) View() tea.View { return tea.NewView(o.layout().Render()) }
+
+// layout is the title line and the cards two per row. Hit ids: "row:N" with
+// N = card*100 for a card, card*100 + line + 1 for its lines.
+func (o overview) layout() *lipgloss.Compositor {
+	title := titleStyle.Render("Overview")
+	if o.cards == nil {
+		return stack(title, "", "loading…")
 	}
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Overview") + "\n")
-	for _, r := range o.rows {
-		fmt.Fprintf(&b, "\n%-10s %s", r.label, r.value)
+	ago := dimStyle.Render("refreshed " + span(o.now.Sub(o.at)) + " ago")
+	title += strings.Repeat(" ", max(o.w-ansi.StringWidth(title)-ansi.StringWidth(ago), 2)) + ago
+	cw := max((o.w-1)/2, 20)
+	blocks := []any{title, ""}
+	for i := 0; i < len(o.cards); i += 2 {
+		row := lipgloss.NewLayer("")
+		h := max(len(o.cards[i].lines), len(o.cards[i+1].lines))
+		for j := range 2 {
+			row.AddLayers(o.cardLayer(i+j, cw, h).X(j * (cw + 1)))
+		}
+		blocks = append(blocks, row)
 	}
-	return tea.NewView(b.String())
+	return stack(blocks...)
 }
 
-// firewallRows is the firewall state followed by one row per Firewall Rule.
-func firewallRows(m *harden.Machine) []row {
-	state, rules, err := firewallRules(m)
-	rows := []row{{"Firewall", state}}
-	switch {
-	case err == nil:
-		rows = append(rows, ruleRows(rules)...)
-	case state == "active":
-		rows = append(rows, row{"", "  rules unreadable: " + err.Error()})
+// cardLayer is card i drawn w wide with h lines, each line its own hit area.
+func (o overview) cardLayer(i, w, h int) *lipgloss.Layer {
+	c := o.cards[i]
+	var body []string
+	var ls []*lipgloss.Layer
+	for j, l := range c.lines {
+		s := fit(l.text, w-4)
+		body = append(body, s)
+		ls = append(ls, lipgloss.NewLayer(s).X(2).Y(1+j).ID("row:"+strconv.Itoa(i*100+j+1)))
 	}
-	return rows
+	return lipgloss.NewLayer(detailBox(c.title, strings.Join(body, "\n"), w, h), ls...).ID("row:" + strconv.Itoa(i*100))
 }
 
-func ruleRows(rules []firewall.Rule) []row {
-	if len(rules) == 0 {
-		return []row{{"", "  no rules"}}
-	}
-	var rows []row
-	for _, r := range rules {
-		s := strconv.Itoa(r.Port)
-		if r.End != 0 {
-			s += fmt.Sprintf("-%d", r.End)
-		}
-		if r.Proto != "" {
-			s += "/" + r.Proto
-		}
-		if r.From != "" {
-			s += " from " + r.From
-		}
-		if r.Limit {
-			s += " (rate-limited)"
-		}
-		rows = append(rows, row{"", "  " + s})
-	}
-	return rows
-}
+func (o overview) buttons() []button { return []button{{"s", "Create swap", ""}} }
 
-func fail2banState(r system.Runner) string {
-	jails, err := fail2ban.Jails(r)
-	switch {
-	case errors.Is(err, fail2ban.ErrNotRunning):
-		return "inactive"
-	case err != nil:
-		return err.Error()
-	case len(jails) == 0:
-		return "active, no jails"
-	}
-	return "active, jails: " + strings.Join(jails, ", ")
-}
+// typing: never (no text field), so ?, m, tab and q go to the shell.
+func (o overview) typing() bool { return false }
 
-// updateState is: last automatic-update run, pending updates, reboot required.
-func updateState(m *harden.Machine) string {
-	timer, pending, reboot := "", "unknown", "reboot unknown"
-	switch m.Host.Family {
-	case "debian":
-		timer = "apt-daily-upgrade.timer"
-		if res, err := m.R.Run("apt-get", "-s", "-o", "Debug::NoLocking=true", "upgrade"); err == nil && res.Code == 0 {
-			pending = strconv.Itoa(strings.Count("\n"+res.Stdout, "\nInst "))
-		}
-		reboot = "no reboot required"
-		if _, err := os.Stat(filepath.Join(m.Root, "/var/run/reboot-required")); err == nil {
-			reboot = "REBOOT REQUIRED"
-		}
-	case "rhel":
-		timer = "dnf-automatic.timer"
-		// -C: cached metadata only, no network round-trip.
-		if res, err := m.R.Run("dnf", "-q", "-C", "check-update"); err == nil && (res.Code == 0 || res.Code == 100) {
-			n := 0
-			for _, line := range strings.Split(res.Stdout, "\n") {
-				if strings.HasPrefix(line, "Obsoleting") {
-					break
-				}
-				if len(strings.Fields(line)) == 3 {
-					n++
-				}
-			}
-			pending = strconv.Itoa(n)
-		}
-		if res, err := m.R.Run("needs-restarting", "-r"); err == nil && res.Code == 0 {
-			reboot = "no reboot required"
-		} else if err == nil && res.Code == 1 {
-			reboot = "REBOOT REQUIRED"
-		}
+func (o overview) keys() string {
+	if o.swap {
+		return keyHelp(o.buttons()) + " · esc back"
 	}
-	last := "unknown"
-	if res, err := m.R.Run("systemctl", "show", "-p", "LastTriggerUSec", "--value", timer); timer != "" && err == nil && res.Code == 0 {
-		last = strings.TrimSpace(res.Stdout)
-		if last == "" || last == "n/a" {
-			last = "never"
-		}
-	}
-	return fmt.Sprintf("last run %s · %s pending · %s", last, pending, reboot)
-}
-
-func diskState(r system.Runner) string {
-	res, err := r.Run("df", "-h", "-P", "/")
-	if err != nil || res.Code != 0 {
-		return "unknown"
-	}
-	lines := strings.Split(strings.TrimSpace(res.Stdout), "\n")
-	if f := strings.Fields(lines[len(lines)-1]); len(f) >= 5 && len(lines) > 1 {
-		return fmt.Sprintf("%s used of %s (%s)", f[2], f[1], f[4])
-	}
-	return "unknown"
-}
-
-func ramState(root string) string {
-	b, err := os.ReadFile(filepath.Join(root, "/proc/meminfo"))
-	if err != nil {
-		return "unknown"
-	}
-	kb := map[string]float64{}
-	for _, line := range strings.Split(string(b), "\n") {
-		if f := strings.Fields(line); len(f) >= 2 {
-			kb[strings.TrimSuffix(f[0], ":")], _ = strconv.ParseFloat(f[1], 64)
-		}
-	}
-	total, avail := kb["MemTotal"], kb["MemAvailable"]
-	if total == 0 {
-		return "unknown"
-	}
-	const gib = 1024 * 1024
-	return fmt.Sprintf("%.1f GiB used of %.1f GiB", (total-avail)/gib, total/gib)
+	return "esc back"
 }

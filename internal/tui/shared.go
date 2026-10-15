@@ -1,6 +1,6 @@
 package tui
 
-// Helpers shared by several screens: the logged mutation path, the
+// Helpers shared by several screens: the quiet-error rule, the
 // operator's SSH session, the firewall and the Listening Ports.
 
 import (
@@ -10,50 +10,27 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/firewall"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
 )
 
-// logMutation takes the global lock under root, runs do and appends one
-// action-log line. A busy lock returns its holder and runs nothing.
-func logMutation(root, action string, do func() error) error {
-	lk, err := actionlog.Lock(filepath.Join(root, actionlog.LockPath))
-	if err != nil {
-		return err
-	}
-	defer lk.Close()
-	err = do()
-	appendLog(root, action, err)
-	return err
-}
-
 // quiet marks an error whose text may carry secrets (e.g. a Cron Entry's
 // command): the action log gets a bare "failed", the screen the full text.
 type quiet struct{ error }
 
-// appendLog appends action's action-log line under root: ok, stopped (at the
-// Verify Gate, as the CLI logs it), or failed with err (bare if quiet).
-func appendLog(root, action string, err error) {
-	result := "ok"
+// logResult is what the log records for err: ok, stopped (at the Verify
+// Gate, as the CLI logs it), or failed with err (bare if quiet).
+func logResult(err error) string {
 	switch {
 	case errors.Is(err, harden.ErrStopped):
-		result = "stopped"
+		return "stopped"
 	case errors.As(err, new(quiet)):
-		result = "failed"
+		return "failed"
 	case err != nil:
-		result = "failed: " + err.Error()
+		return "failed: " + err.Error()
 	}
-	actionlog.Append(filepath.Join(root, actionlog.LogPath), action, result) // failures to log are ignored
-}
-
-// dropLast is s without its last rune: backspace in a text field.
-func dropLast(s string) string {
-	if r := []rune(s); len(r) > 0 {
-		return string(r[:len(r)-1])
-	}
-	return s
+	return "ok"
 }
 
 // sessionIP is the client IP of the operator's SSH session, "" when not
@@ -124,14 +101,16 @@ func firewallRules(m *harden.Machine) (state string, rules []firewall.Rule, err 
 
 // listeningPort is a Listening Port: a tcp socket in LISTEN or a bound udp socket.
 type listeningPort struct {
-	proto string
-	port  int
+	proto   string
+	port    int
+	process string // "" when ss did not say
 }
 
-// listeningPorts reads `ss -Hltun` (no header, listening tcp+udp, numeric):
-// "Netid State Recv-Q Send-Q Local:Port Peer:Port". nil if ss failed.
+// listeningPorts reads `ss -Hltunp` (no header, listening tcp+udp, numeric,
+// processes): "Netid State Recv-Q Send-Q Local:Port Peer:Port
+// users:(("sshd",pid=812,fd=3))". nil if ss failed.
 func listeningPorts(r system.Runner) []listeningPort {
-	res, err := r.Run("ss", "-Hltun")
+	res, err := r.Run("ss", "-Hltunp")
 	if err != nil || res.Code != 0 {
 		return nil
 	}
@@ -143,7 +122,12 @@ func listeningPorts(r system.Runner) []listeningPort {
 		}
 		local := f[4]
 		if port, err := strconv.Atoi(local[strings.LastIndex(local, ":")+1:]); err == nil {
-			ls = append(ls, listeningPort{f[0], port})
+			l := listeningPort{proto: f[0], port: port}
+			if len(f) > 6 {
+				_, users, _ := strings.Cut(f[6], `(("`)
+				l.process, _, _ = strings.Cut(users, `"`)
+			}
+			ls = append(ls, l)
 		}
 	}
 	return ls

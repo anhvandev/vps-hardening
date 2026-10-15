@@ -71,6 +71,16 @@ func (m *Manager) StageBLive() bool {
 	return regexp.MustCompile(`(?m)^PasswordAuthentication no$`).Match(b)
 }
 
+// KeyOnly is nil when the effective config (sshd -T) is key-only with root
+// login off, else why not.
+func (m *Manager) KeyOnly() error {
+	out, err := m.Effective()
+	if err != nil {
+		return err
+	}
+	return hardened(out)
+}
+
 // ensureInclude prepends the Include line: drop-ins only count when included.
 func (m *Manager) ensureInclude() error {
 	p := m.path(MainConfig)
@@ -335,20 +345,5 @@ func writeFile(p string, data []byte, mode os.FileMode) error {
 	if b, err := os.ReadFile(p); err == nil && bytes.Equal(b, data) {
 		return nil
 	}
-	f, err := os.CreateTemp(filepath.Dir(p), ".vpsctl-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name()) // no-op after rename
-	_, err = f.Write(data)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Chmod(f.Name(), mode)
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), p)
-	}
-	return err
+	return system.WriteAtomic(p, data, mode, nil)
 }

@@ -166,12 +166,16 @@ func (c *Change) StageB() error {
 	})
 }
 
+// ErrRestored marks an error after which the SSH change was rolled back:
+// files, sshd and the firewall are as before it.
+var ErrRestored = errors.New("restored pre-run SSH state")
+
 func (c *Change) restoreOnError(f func() error) error {
 	if err := f(); err != nil {
 		if rerr := c.Restore(); rerr != nil {
 			return fmt.Errorf("%w; restore also failed: %w", err, rerr)
 		}
-		return fmt.Errorf("%w (restored pre-run SSH state)", err)
+		return fmt.Errorf("%w (%w)", err, ErrRestored)
 	}
 	return nil
 }

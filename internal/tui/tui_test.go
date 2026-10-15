@@ -2,9 +2,11 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,14 +40,22 @@ func debianHost(t *testing.T) *testHost {
 				"ufw allow 22/tcp\nufw allow 80/tcp\nufw allow from 10.0.0.0/8 to any port 5432 proto tcp\n"},
 			"fail2ban-client status": {Stdout: "Status\n|- Number of jail:\t1\n`- Jail list:\tsshd\n"},
 			"systemctl show -p LastTriggerUSec --value apt-daily-upgrade.timer": {Stdout: "Wed 2026-10-14 06:12:03 UTC\n"},
-			"apt-get -s -o Debug::NoLocking=true upgrade":                       {Stdout: "Reading package lists...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"},
+			"apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade":       {Stdout: "Reading package lists...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"},
 			"df -h -P /": {Stdout: "Filesystem      Size  Used Avail Capacity Mounted on\n/dev/vda1        20G  4.1G   15G      22% /\n"},
+			"sshd -T":    {Stdout: "port 22\npasswordauthentication no\nkbdinteractiveauthentication no\npubkeyauthentication yes\npermitrootlogin no\n"},
 		}},
 	}
 	h.write("/proc/meminfo", "MemTotal:        4194304 kB\nMemFree:          524288 kB\nMemAvailable:    3145728 kB\n")
+	h.write("/etc/ssh/ssh_host_ed25519_key", "k")
 	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 22\n"+
 		"PasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\n")
 	return h
+}
+
+// unharden leaves only Stage A live: SSH on 2222, password and root login still on.
+func (h *testHost) unharden() {
+	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 2222\n")
+	h.fake.Results["sshd -T"] = system.Result{Stdout: "port 2222\npasswordauthentication yes\nkbdinteractiveauthentication no\npubkeyauthentication yes\npermitrootlogin yes\n"}
 }
 
 func (h *testHost) write(p, s string) {
@@ -61,7 +71,7 @@ func (h *testHost) write(p, s string) {
 
 // start opens the TUI on h in a fixed-size virtual terminal.
 func start(h *testHost) *teatest.TestModel {
-	m := New(harden.NewMachine(h.fake, h.host, h.root, io.Discard))
+	m := New(harden.NewMachine(h.fake, h.host, h.root, io.Discard), time.Now())
 	return teatest.NewTestModel(h.t, m, teatest.WithInitialTermSize(120, 40))
 }
 
@@ -91,14 +101,13 @@ func wantAll(t *testing.T, view string, wants ...string) {
 
 func TestOverviewOnHardenedHost(t *testing.T) {
 	tm := start(debianHost(t))
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	v := quitView(t, tm)
 	wantAll(t, v,
-		"Firewall", "active", "22/tcp", "80/tcp", "5432/tcp from 10.0.0.0/8",
-		"fail2ban", "sshd",
-		"Wed 2026-10-14 06:12:03 UTC", "0 pending", "no reboot required",
-		"4.1G used of 20G (22%)",
-		"1.0 GiB used of 4.0 GiB",
+		"SSH         ● key-only · :22", "Firewall    ● ufw · 3 rules",
+		"● 0 security · 0 other pending", "last auto-run", "● no reboot required",
+		"Disk /      ▇▇▁▁▁▁▁▁▁▁  4.1G/20G  22%",
+		"RAM         ▇▇▇▁▁▁▁▁▁▁  1.0/4.0 GiB",
 	)
 	if strings.Contains(strings.ToLower(v), "not hardened") {
 		t.Errorf("hardened host shows the banner:\n%s", v)
@@ -107,12 +116,30 @@ func TestOverviewOnHardenedHost(t *testing.T) {
 
 func TestBannerOnUnhardenedHost(t *testing.T) {
 	h := debianHost(t)
-	// Stage A only: the port is ours, auth hardening is not live yet.
-	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 2222\n")
+	h.unharden()
 	tm := start(h)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	v := quitView(t, tm)
-	wantAll(t, v, "NOT HARDENED", "Overview", "22/tcp")
+	wantAll(t, v, "NOT HARDENED", "Overview", "SSH         ✗ not key-only")
+}
+
+// The Overview leaves ?, m and tab to the shell, and q quits from it like
+// from any screen that isn't typing.
+func TestShellKeysOnOverview(t *testing.T) {
+	tm := start(debianHost(t))
+	waitFor(t, tm, "Uptime")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // focus the Overview
+	tm.Type("?")
+	waitFor(t, tm, "Shift+drag to select text")
+	tm.Type(" ") // closes the help
+	tm.Type("q")
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+}
+
+func TestQuitFromAScreen(t *testing.T) {
+	tm := openFirewall(t, debianHost(t))
+	tm.Type("q")
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 }
 
 func TestQuit(t *testing.T) {
@@ -122,39 +149,32 @@ func TestQuit(t *testing.T) {
 	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 }
 
-func TestOverviewShowsMissingPiecesAsState(t *testing.T) {
-	h := debianHost(t)
-	h.fake.Results["ufw status"] = system.Result{Stdout: "Status: inactive\n"}
-	delete(h.fake.Results, "fail2ban-client status") // not installed
-	tm := start(h)
-	waitFor(t, tm, "RAM")
-	v := quitView(t, tm)
-	wantAll(t, v, "Firewall   inactive", "80/tcp", "fail2ban   not installed")
-}
-
-// Reopening the Overview reads the host again: a rule added by hand shows up.
+// Reopening the Overview reads the host again: rules added by hand show up.
 func TestOverviewReadsLiveOnEachOpen(t *testing.T) {
 	h := debianHost(t)
 	tm := start(h)
-	waitFor(t, tm, "5432/tcp")
-	h.fake.Results["ufw show added"] = system.Result{Stdout: "ufw allow 22/tcp\nufw allow 443/tcp\n"}
+	waitFor(t, tm, "Uptime")
+	var rules strings.Builder
+	for p := 1001; p <= 1012; p++ {
+		fmt.Fprintf(&rules, "ufw allow %d/tcp\n", p)
+	}
+	h.fake.Results["ufw show added"] = system.Result{Stdout: rules.String()}
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // reopen the Overview
-	waitFor(t, tm, "443/tcp")
+	waitFor(t, tm, "12 rules")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape}) // back to the menu
 	waitFor(t, tm, "q quit")
 	v := quitView(t, tm)
-	wantAll(t, v, "443/tcp")
+	wantAll(t, v, "ufw · 12 rules")
 }
 
-func TestUnbuiltModulesMarkedComingSoon(t *testing.T) {
-	tm := start(debianHost(t))
-	waitFor(t, tm, "RAM")
-	v := quitView(t, tm)
-	for _, title := range menu {
-		if _, built := screens[title]; !built {
-			wantAll(t, v, title+" (coming soon)")
-		}
+// menuTo is the keys that move the sidebar cursor from Overview (where the
+// TUI opens) to title.
+func menuTo(title string) string {
+	n := slices.Index(items(), title) - slices.Index(items(), "Overview")
+	if n < 0 {
+		return strings.Repeat("k", -n)
 	}
+	return strings.Repeat("j", n)
 }
 
 func TestUsersScreenListsManagedUsers(t *testing.T) {
@@ -171,15 +191,15 @@ func TestUsersScreenListsManagedUsers(t *testing.T) {
 
 	tm := start(h)
 	waitFor(t, tm, "RAM")
-	tm.Type("jjjj")
+	tm.Type(menuTo("Users"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitFor(t, tm, "LOCKED")
+	waitFor(t, tm, "STATE")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	waitFor(t, tm, "q quit")
 	v := quitView(t, tm)
-	wantAll(t, v, "NAME", "SUDO", "KEYS", "LOCKED",
-		"alice (you)  yes   2     no",
-		"bob          no    0     yes")
+	wantAll(t, v, "USER", "SUDO", "KEYS", "STATE", "2 Managed Users · 1 with sudo",
+		"alice (you)  ●     2     ● active  —           ◆",
+		"bob          ·     0     ⚠ locked")
 	if strings.Contains(v, "daemon") {
 		t.Errorf("system account shown:\n%s", v)
 	}
@@ -192,20 +212,21 @@ func TestOverviewOnRhelHost(t *testing.T) {
 		fake: &system.Fake{Results: map[string]system.Result{
 			"firewall-cmd --state":                                          {Stdout: "running\n"},
 			"firewall-cmd --permanent --list-ports":                         {Stdout: "8080/tcp 6000-6100/udp\n"},
-			"firewall-cmd --permanent --list-services":                      {Stdout: "ssh dhcpv6-client\n"},
+			"firewall-cmd --permanent --list-services":                      {Stdout: "ssh\n"},
 			"firewall-cmd --permanent --list-rich-rules":                    {},
 			"fail2ban-client status":                                        {Code: 255, Stderr: "Failed to access socket path"},
 			"systemctl show -p LastTriggerUSec --value dnf-automatic.timer": {Stdout: "n/a\n"},
-			"dnf -q -C check-update":                                        {Code: 100, Stdout: "\nkernel.x86_64   5.14.0-503   baseos\nopenssl.x86_64  3.2.2-6   baseos\n"},
+			"dnf -q -C check-update":                                        {Code: 100, Stdout: "\nkernel.x86_64   5.14.0-503   baseos\nopenssl.x86_64  1:3.2.2-6.el9   baseos\n"},
+			"dnf -q -C updateinfo list --security":                          {Stdout: "RHSA-2024:1234 Important/Sec. openssl-1:3.2.2-6.el9.x86_64\n"},
 			"needs-restarting -r":                                           {Code: 1, Stdout: "Reboot is required\n"},
 			"df -h -P /":                                                    {Stdout: "Filesystem Size Used Avail Capacity Mounted on\n/dev/sda1 50G 10G 40G 20% /\n"},
 		}},
 	}
 	h.write("/proc/meminfo", "MemTotal: 2097152 kB\nMemAvailable: 1048576 kB\n")
 	tm := start(h)
-	waitFor(t, tm, "RAM")
+	waitFor(t, tm, "Uptime")
 	v := quitView(t, tm)
-	wantAll(t, v, "Firewall   active", "8080/tcp", "6000-6100/udp", "22/tcp",
-		"fail2ban   inactive", "last run never · 2 pending · REBOOT REQUIRED",
-		"10G used of 50G (20%)", "1.0 GiB used of 2.0 GiB", "NOT HARDENED")
+	wantAll(t, v, "Firewall    ● firewalld · 3 rules",
+		"⚠ 1 security · 1 other pending", "last auto-run never", "⚠ reboot required",
+		"10G/50G  20%", "1.0/2.0 GiB", "NOT HARDENED")
 }

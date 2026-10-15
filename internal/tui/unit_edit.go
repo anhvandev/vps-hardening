@@ -2,41 +2,38 @@ package tui
 
 import (
 	"cmp"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
-	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/service"
+	"github.com/anhvandev/vpsctl/internal/system"
 )
 
 // unitEdit is an edit of the unit file or drop-in at path, made in $EDITOR on
-// a temp copy and applied with service.Apply (verify, then reload). After a
-// failed apply the copy is kept so the operator can re-edit or discard it.
-// The global lock is held from before the editor opens until close.
+// a temp copy and applied as a Task with service.Apply (verify, then reload).
+// The global lock is held while the editor is open (the Task takes it
+// next). Until the apply succeeds the copy is kept so the operator can
+// re-edit or discard it.
 type unitEdit struct {
 	unit, path string
-	lock       *os.File
-	tmp        string // the copy the editor works on
-	orig       string // path's content (or template) before editing
-	failed     bool   // the last apply failed: enter re-edits, esc discards
-	create     bool   // path is a new unit: applied with service.Create
+	lock       *os.File // held while the editor is open, else nil
+	tmp        string   // the copy the editor works on
+	orig       string   // path's content (or template) before editing
+	failed     bool     // saved but not applied: enter re-edits, esc discards
+	create     bool     // path is a new unit: applied with service.Create
+	applied    atomic.Bool
 }
 
-// editedMsg is the editor exiting; appliedMsg is the edit's apply finishing,
-// with the screen's units re-read (its reload message).
-type (
-	editedMsg  struct{ err error }
-	appliedMsg struct {
-		reloaded tea.Msg
-		ok       bool
-	}
-)
+// editedMsg is the editor exiting.
+type editedMsg struct{ err error }
 
 // newUnitEdit takes the global lock under root and copies path's content, or
 // template if it has none, to a temp file for the editor. A busy lock returns
@@ -73,29 +70,67 @@ func (e *unitEdit) open() tea.Cmd {
 	return tea.ExecProcess(c, func(err error) tea.Msg { return editedMsg{err} })
 }
 
+// unlock releases the global lock if the edit holds it.
+func (e *unitEdit) unlock() {
+	if e.lock != nil {
+		e.lock.Close()
+		e.lock = nil
+	}
+}
+
 // close ends the edit: drops the temp copy and releases the global lock.
 func (e *unitEdit) close() {
 	os.Remove(e.tmp)
-	e.lock.Close()
+	e.unlock()
 }
 
-// overrideFlow is the override edit (E, in $EDITOR via unitEdit) and revert
-// (U) flow shared by the Services and Timers screens.
+// overrideFlow is the override edit (in $EDITOR via unitEdit) and revert
+// flow shared by the Services and Timers screens, on the screen's edit in
+// progress (*edit, nil if none) and status-bar notice.
 type overrideFlow struct {
 	m        *harden.Machine
-	kind     string                      // "service" or "timer": the action-log label
-	template string                      // a new override's body, after its header comment
-	reload   func(status string) tea.Cmd // the screen's re-read of its units
+	kind     string // "service" or "timer": the Task History label
+	template string // a new override's body, after its header comment
 }
 
-// update runs the flow on the screen's edit in progress (*edit, nil if none)
-// and status: the editor exiting, re-edit (enter) / discard (esc) after a
-// failed apply, and E / U on unit ("" when none is selected or a form has the
-// keys). ok is false for anything else. appliedMsg stays with the screen.
-func (f overrideFlow) update(edit **unitEdit, status *string, msg tea.Msg, unit string) (_ tea.Cmd, ok bool) {
+// start opens unit's override in the editor; a busy lock refuses it.
+func (f overrideFlow) start(edit **unitEdit, status *string, unit string) tea.Cmd {
+	e, err := newUnitEdit(f.m.Root, unit, service.OverridePath(f.m.Root, unit),
+		"# Override for "+unit+": settings here replace the vendor unit's.\n"+f.template)
+	if err != nil {
+		*status = err.Error()
+		return nil
+	}
+	*edit, *status = e, ""
+	return e.open()
+}
+
+// create opens content, a new unit, in the editor; it is created once saved.
+func (f overrideFlow) create(edit **unitEdit, unit, content string) (tea.Cmd, error) {
+	e, err := newUnitEdit(f.m.Root, unit, service.UnitPath(f.m.Root, unit), content)
+	if err == nil {
+		if err = service.CheckNew(f.m.R, f.m.Root, unit); err != nil {
+			e.close()
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	e.create, *edit = true, e
+	return e.open(), nil
+}
+
+// update runs the editor exiting (a changed copy is applied as a Task) and
+// re-edit (enter) / discard (esc) of a copy not applied; ok is false for
+// anything else.
+func (f overrideFlow) update(edit **unitEdit, status *string, msg tea.Msg) (_ tea.Cmd, ok bool) {
 	e := *edit
+	if e == nil {
+		return nil, false
+	}
 	switch msg := msg.(type) {
 	case editedMsg:
+		e.unlock()
 		content, err := os.ReadFile(e.tmp)
 		switch {
 		case msg.err != nil || err != nil:
@@ -103,75 +138,75 @@ func (f overrideFlow) update(edit **unitEdit, status *string, msg tea.Msg, unit 
 		case string(content) == e.orig && !e.create:
 			*status = "no changes to " + e.unit
 		default:
+			e.failed, *status = true, ""
 			return f.apply(e, content), true
 		}
 		e.close()
 		*edit = nil
 		return nil, true
 	case tea.KeyPressMsg:
-		if e != nil && e.failed {
-			switch msg.String() {
-			case "enter":
-				return e.open(), true
-			case "esc":
-				e.close()
-				*status, *edit = "discarded edit of "+e.unit, nil
-				return nil, true
-			}
+		if !e.failed {
+			return nil, false
 		}
-		switch {
-		case unit == "":
-		case msg.String() == "E":
-			if err := guard.Check(guard.Facts{}, guard.UnitAction{Unit: unit, Verb: "edit"}); err != nil {
-				*status = err.Error()
-				return nil, true
-			}
-			e, err := newUnitEdit(f.m.Root, unit, service.OverridePath(f.m.Root, unit),
-				"# Override for "+unit+": settings here replace the vendor unit's.\n"+f.template)
+		switch msg.String() {
+		case "enter":
+			lk, err := actionlog.Lock(filepath.Join(f.m.Root, actionlog.LockPath))
 			if err != nil {
 				*status = err.Error()
 				return nil, true
 			}
-			*edit = e
+			e.lock = lk
 			return e.open(), true
-		case msg.String() == "U":
-			return f.revert(unit), true
+		case "esc":
+			e.close()
+			*status, *edit = "discarded edit of "+e.unit, nil
+			return nil, true
 		}
 	}
 	return nil, false
 }
 
-// revert removes unit's override under logMutation, then re-reads the units.
-func (f overrideFlow) revert(unit string) tea.Cmd {
-	return func() tea.Msg {
-		err := logMutation(f.m.Root, f.kind+" revert "+unit, func() error {
-			return service.Revert(f.m.R, f.m.Root, unit)
-		})
-		status := "reverted " + unit + " override, systemd reloaded"
-		if err != nil {
-			status = err.Error()
-		}
-		return f.reload(status)()
+// done is a Task ending: once the edit's apply succeeded the edit is closed,
+// returning the unit if it was created; otherwise the copy stays.
+func (f overrideFlow) done(edit **unitEdit, status *string) (created string) {
+	e := *edit
+	if e == nil || !e.failed {
+		return ""
 	}
+	if !e.applied.Load() {
+		*status = "nothing applied · enter re-edit · esc discard"
+		return ""
+	}
+	e.close()
+	*edit, *status = nil, ""
+	if e.create {
+		return e.unit
+	}
+	return ""
 }
 
-// apply applies content as e's file, or creates it as a new unit, (under the
-// edit's lock) and logs the result, then re-reads the units.
+// revert removes unit's override as a Task.
+func (f overrideFlow) revert(unit string) tea.Cmd {
+	return runTask("Revert "+unit+" override", f.kind+" revert "+unit, "reverted "+unit+" override, systemd reloaded",
+		taskStep{"Remove the override and reload", func(r system.Runner, _ io.Writer) error {
+			return service.Revert(r, f.m.Root, unit)
+		}})
+}
+
+// apply applies content as e's file, or creates it as a new unit, as a Task.
 func (f overrideFlow) apply(e *unitEdit, content []byte) tea.Cmd {
-	return func() tea.Msg {
-		var err error
-		status := "override for " + e.unit + " applied, systemd reloaded"
-		if e.create {
-			err = service.Create(f.m.R, f.m.Root, e.unit, content)
-			appendLog(f.m.Root, f.kind+" create "+e.unit, err)
-			status = "created " + e.unit + ", verified and loaded"
-		} else {
-			err = service.Apply(f.m.R, e.path, e.unit, content)
-			appendLog(f.m.Root, f.kind+" edit "+e.unit, err)
+	step := taskStep{"Verify and reload", func(r system.Runner, _ io.Writer) error {
+		err := service.Apply(r, e.path, e.unit, content)
+		e.applied.Store(err == nil)
+		return err
+	}}
+	if e.create {
+		step.do = func(r system.Runner, _ io.Writer) error {
+			err := service.Create(r, f.m.Root, e.unit, content)
+			e.applied.Store(err == nil)
+			return err
 		}
-		if err != nil {
-			status = err.Error() + "\nnothing applied · enter re-edit · esc discard"
-		}
-		return appliedMsg{f.reload(status)(), err == nil}
+		return runTask("Create "+e.unit, f.kind+" create "+e.unit, "created "+e.unit+", verified and loaded", step)
 	}
+	return runTask("Edit "+e.unit+" override", f.kind+" edit "+e.unit, "override for "+e.unit+" applied, systemd reloaded", step)
 }

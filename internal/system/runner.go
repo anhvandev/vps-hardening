@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 // Result is what a finished command produced. A non-zero Code is not an error.
@@ -28,11 +29,23 @@ type Runner interface {
 // Exec runs real commands on the host, with LC_ALL=C so output is parseable.
 type Exec struct{}
 
-func (Exec) Run(name string, args ...string) (Result, error) {
+func (e Exec) Run(name string, args ...string) (Result, error) {
+	return e.RunLive(io.Discard, name, args...)
+}
+
+// LiveRunner is a Runner that can also copy a command's stdout and stderr to
+// w as they are written (a Task's live output). Runners that can implement
+// it next to Run.
+type LiveRunner interface {
+	RunLive(w io.Writer, name string, args ...string) (Result, error)
+}
+
+func (Exec) RunLive(w io.Writer, name string, args ...string) (Result, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	sw := &syncWriter{w: w} // stdout and stderr are copied by two goroutines
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(&stdout, sw), io.MultiWriter(&stderr, sw)
 	err := cmd.Run()
 	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
 	var exitErr *exec.ExitError
@@ -43,9 +56,20 @@ func (Exec) Run(name string, args ...string) (Result, error) {
 	return res, err
 }
 
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
 // Streamer starts a long-running command (journalctl -f) and hands back its
-// stdout as it is written; Close stops the command. Runners that can stream
-// implement it next to Run.
+// stdout and stderr as they are written; Close stops the command. Runners
+// that can stream implement it next to Run.
 type Streamer interface {
 	Stream(name string, args ...string) (io.ReadCloser, error)
 }
@@ -53,39 +77,48 @@ type Streamer interface {
 func (Exec) Stream(name string, args ...string) (io.ReadCloser, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	out, err := cmd.StdoutPipe()
+	out, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	cmd.Stdout, cmd.Stderr = w, w // one pipe, so lines keep their order
+	err = cmd.Start()
+	w.Close() // the command holds its own copy; reads end when it exits
+	if err != nil {
+		out.Close()
 		return nil, err
 	}
 	return stream{out, cmd}, nil
 }
 
-// stream is a running command's stdout; Close kills the command and reaps it.
+// stream is a running command's stdout and stderr; Close kills the command
+// and reaps it.
 type stream struct {
-	io.Reader
+	*os.File
 	cmd *exec.Cmd
 }
 
 func (s stream) Close() error {
 	s.cmd.Process.Kill()
 	s.cmd.Wait() // "signal: killed" is the expected outcome, not an error
-	return nil
+	return s.File.Close()
 }
 
 // Fake is a scripted Runner for tests. Results is keyed by the full command
 // line ("systemctl is-enabled ssh.socket"); unscripted commands fail as if the
 // binary were missing. Streams scripts Stream the same way. Every call is
-// appended to Calls.
+// appended to Calls. Safe for concurrent calls (a TUI reads in the
+// background); change Results only between them.
 type Fake struct {
 	Results map[string]Result
 	Streams map[string]io.ReadCloser
 	Calls   []string
+	mu      sync.Mutex
 }
 
 func (f *Fake) Stream(name string, args ...string) (io.ReadCloser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	line := strings.Join(append([]string{name}, args...), " ")
 	f.Calls = append(f.Calls, line)
 	rc, ok := f.Streams[line]
@@ -96,6 +129,8 @@ func (f *Fake) Stream(name string, args ...string) (io.ReadCloser, error) {
 }
 
 func (f *Fake) Run(name string, args ...string) (Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	line := strings.Join(append([]string{name}, args...), " ")
 	f.Calls = append(f.Calls, line)
 	res, ok := f.Results[line]

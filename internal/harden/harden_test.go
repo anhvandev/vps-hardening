@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/anhvandev/vpsctl/internal/firewall"
@@ -14,7 +15,8 @@ type fakeHost struct {
 	calls     []string
 	fail      map[string]bool
 	plan      Plan
-	waitSaved bool // last InstallKey waitSaved
+	waitSaved bool    // last InstallKey waitSaved
+	record    *Record // the saved Hardening Record
 }
 
 func newHost() *fakeHost {
@@ -34,13 +36,16 @@ func (h *fakeHost) InstallKey(_, _ string, _, waitSaved bool) error {
 	h.waitSaved = waitSaved
 	return h.step("key")
 }
-func (h *fakeHost) CurrentPort() (int, error)        { return h.plan.OldPort, h.step("port") }
-func (h *fakeHost) PreLockAssertions(string) error   { return h.step("assert") }
-func (h *fakeHost) LockDefaultCloudUsers() error     { return h.step("lock") }
+func (h *fakeHost) CurrentPort() (int, error)      { return h.plan.OldPort, h.step("port") }
+func (h *fakeHost) PreLockAssertions(string) error { return h.step("assert") }
+func (h *fakeHost) LockDefaultCloudUsers() ([]string, error) {
+	return []string{"ubuntu"}, h.step("lock")
+}
 func (h *fakeHost) BlockCloudInitReinjection() error { return h.step("cloudinit") }
 func (h *fakeHost) Fail2ban(int) error               { return h.step("fail2ban") }
 func (h *fakeHost) AutoUpdates() error               { return h.step("updates") }
 func (h *fakeHost) Sysctl() error                    { return h.step("sysctl") }
+func (h *fakeHost) SaveRecord(r Record) error        { h.record = &r; return nil }
 func (h *fakeHost) EnsureFirewall(int) (firewall.Backend, error) {
 	return nil, h.step("firewall")
 }
@@ -133,6 +138,97 @@ func TestSkipFlagsAndOptionalStepFailuresAreNotFatal(t *testing.T) {
 	}
 	if slices.Contains(h.calls, "firewall") || slices.Contains(h.calls, "updates") {
 		t.Fatalf("skipped steps ran: %v", h.calls)
+	}
+}
+
+// The SUMMARY says which Default Cloud Users were locked and which optional
+// steps failed; the TUI's Steps give the same summary.
+func TestSummaryNamesLockedUsersAndFailedSteps(t *testing.T) {
+	h := newHost()
+	h.fail["fail2ban"] = true
+	var out strings.Builder
+	if err := Run(Options{User: "alice", Yes: true}, h, &out, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := "admin alice · ssh :2222 · password auth off · root login off\n" +
+		"Default Cloud Users locked: ubuntu\nfail2ban not applied: fail2ban failed"
+	if !strings.Contains(out.String(), "== SUMMARY ==\n"+want+"\n") {
+		t.Errorf("output:\n%s", out.String())
+	}
+
+	h = newHost()
+	h.fail["fail2ban"] = true
+	steps, summary := Steps(Options{User: "alice", Yes: true})
+	for _, s := range steps {
+		if err := s.Do(h, io.Discard, nil); err != nil && !errors.As(err, new(Warning)) {
+			t.Fatalf("%s: %v", s.Name, err)
+		}
+	}
+	if summary() != want {
+		t.Errorf("summary %q, want %q", summary(), want)
+	}
+}
+
+// The skip-flag warnings come in a fixed order.
+func TestSkipWarningsInOrder(t *testing.T) {
+	for range 20 {
+		var out strings.Builder
+		o := Options{User: "alice", Yes: true, SkipFail2ban: true, SkipUpdates: true, SkipSysctl: true}
+		if err := Run(o, newHost(), &out, nil); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "[!] --skip-fail2ban\n[!] --skip-updates\n[!] --skip-sysctl\n") {
+			t.Fatalf("output:\n%s", out.String())
+		}
+	}
+}
+
+// A run records who ran it, the Admin User, the steps the operator skipped
+// and the ones it applied; an optional step that failed is not applied.
+func TestRunSavesHardeningRecord(t *testing.T) {
+	t.Setenv("SUDO_USER", "anh")
+	h := newHost()
+	h.fail["fail2ban"] = true
+	o := Options{User: "alice", Yes: true, SkipFirewall: true, SkipUpdates: true}
+	if err := Run(o, h, io.Discard, nil); err != nil {
+		t.Fatal(err)
+	}
+	r := h.record
+	if r == nil || r.Admin != "alice" || r.By != "anh" || r.Ran.IsZero() || !slices.Equal(r.Skipped, []string{"firewall", "updates"}) {
+		t.Fatalf("record = %+v", r)
+	}
+	var applied []string
+	for id := range r.Applied {
+		applied = append(applied, id)
+	}
+	slices.Sort(applied)
+	if want := []string{"admin", "cloud-init", "cloud-users", "port", "ssh", "sysctl"}; !slices.Equal(applied, want) {
+		t.Errorf("applied %v, want %v", applied, want)
+	}
+}
+
+// A run that stops at the Verify Gate still records what it applied before
+// the gate (the Admin User); the SSH change was restored, so not ssh.
+func TestStoppedRunSavesAppliedSoFar(t *testing.T) {
+	h := newHost()
+	Run(Options{User: "alice"}, h, io.Discard, func(string) (bool, error) { return false, nil })
+	r := h.record
+	if r == nil || r.Admin != "alice" || r.Applied["admin"].IsZero() || !r.Applied["ssh"].IsZero() {
+		t.Errorf("record = %+v", r)
+	}
+}
+
+// Steps are the run's Hardening Steps, without the skipped ones.
+func TestStepsLeaveOutSkipped(t *testing.T) {
+	var names []string
+	steps, _ := Steps(Options{User: "alice", SkipFirewall: true, SkipSysctl: true})
+	for _, s := range steps {
+		names = append(names, s.Name)
+	}
+	want := []string{"Admin User + key", "Key-only SSH, no root login (Verify Gate)", "Default Cloud Users locked",
+		"cloud-init re-injection block", "fail2ban", "Automatic security updates"}
+	if !slices.Equal(names, want) {
+		t.Errorf("steps\n got %q\nwant %q", names, want)
 	}
 }
 
