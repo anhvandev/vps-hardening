@@ -69,6 +69,31 @@ func TestPreLockAssertions(t *testing.T) {
 	}
 }
 
+// Re-running harden on a host whose ignore list was edited in the TUI keeps
+// the ignoreip entries: the drop-in comes out unchanged.
+func TestFail2banRerunKeepsIgnoreList(t *testing.T) {
+	root := t.TempDir()
+	f := &system.Fake{Results: map[string]system.Result{
+		"fail2ban-client --version":  {},
+		"systemctl enable fail2ban":  {},
+		"systemctl restart fail2ban": {},
+	}}
+	m := NewMachine(f, system.Host{Family: "debian", PkgManager: "apt"}, root, io.Discard)
+	if err := m.Fail2ban(22); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(root, "/etc/fail2ban/jail.d/00-vpsctl.local")
+	b, _ := os.ReadFile(p)
+	edited := "[DEFAULT]\nignoreip = 203.0.113.5 10.0.0.0/8\n\n" + string(b)
+	write(t, p, edited, 0o644)
+	if err := m.Fail2ban(22); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != edited {
+		t.Errorf("re-run drop-in =\n%s\nwant\n%s", b, edited)
+	}
+}
+
 func TestDnfAutoUpdatesAreSecurityOnly(t *testing.T) {
 	root := t.TempDir()
 	conf := filepath.Join(root, "/etc/dnf/automatic.conf")
