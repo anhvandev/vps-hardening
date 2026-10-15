@@ -50,6 +50,37 @@ func TestFirewallListsUfwRulesWithListeners(t *testing.T) {
 	wantRule(t, v, "5432", "tcp", "10.0.0.0/8", "yes")
 }
 
+// Ranges count any listener inside them; tcp and udp are matched separately.
+func TestFirewallListsFirewalldRulesWithListeners(t *testing.T) {
+	h := debianHost(t)
+	h.host = system.Host{DistroID: "rocky", Version: "9.4", Family: "rhel"}
+	h.fake.Results = map[string]system.Result{
+		"firewall-cmd --state":                     {Stdout: "running\n"},
+		"firewall-cmd --permanent --list-ports":    {Stdout: "5000-5500/tcp 50-60/udp 53/tcp 8080/tcp\n"},
+		"firewall-cmd --permanent --list-services": {Stdout: "ssh dhcpv6-client\n"},
+		"firewall-cmd --permanent --list-rich-rules": {Stdout: `rule family="ipv4" source address="10.0.0.0/8" port port="5432" protocol="tcp" accept` + "\n"},
+		"ss -Hltun": ssOut,
+	}
+	v := firewallView(h)
+	wantAll(t, v, "firewalld active")
+	wantRule(t, v, "5000-5500", "tcp", "anywhere", "yes")
+	wantRule(t, v, "50-60", "udp", "anywhere", "yes")
+	wantRule(t, v, "53", "tcp", "anywhere", "no")
+	wantRule(t, v, "8080", "tcp", "anywhere", "no")
+	wantRule(t, v, "22", "tcp", "anywhere", "yes")
+	wantRule(t, v, "5432", "tcp", "10.0.0.0/8", "yes")
+}
+
+// A ufw rule without a protocol is backed by a listener on either.
+func TestFirewallProtolessUfwRule(t *testing.T) {
+	h := debianHost(t)
+	h.fake.Results["ufw show added"] = system.Result{Stdout: "ufw allow 53\nufw allow 1000:2000\n"}
+	h.fake.Results["ss -Hltun"] = ssOut
+	v := firewallView(h)
+	wantRule(t, v, "53", "any", "anywhere", "yes")
+	wantRule(t, v, "1000-2000", "any", "anywhere", "no")
+}
+
 // The table renders inside the shell, and esc hands focus back to the menu.
 func TestFirewallScreenFlow(t *testing.T) {
 	h := debianHost(t)
