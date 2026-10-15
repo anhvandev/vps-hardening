@@ -61,7 +61,7 @@ func (h hardening) Init() tea.Cmd {
 	return func() tea.Msg {
 		rec, _ := harden.LoadRecord(h.m.Root) // unreadable = none: live checks still tell Done/Missing
 		msg := hardeningMsg{steps: h.m.Status(rec), rec: rec}
-		if i := slices.IndexFunc(msg.steps, func(s harden.Step) bool { return s.ID == "cloud-users" }); i >= 0 && msg.steps[i].State != harden.Done {
+		if s, ok := stepOf(msg.steps, "cloud-users"); ok && s.State != harden.Done {
 			users, err := h.m.ManagedUsers()
 			if err == nil {
 				_, err = cloudUsersAdmin(users, rec)
@@ -74,11 +74,21 @@ func (h hardening) Init() tea.Cmd {
 	}
 }
 
+// stepOf is the step of steps with id; false if there is none.
+func stepOf(steps []harden.Step, id string) (harden.Step, bool) {
+	i := slices.IndexFunc(steps, func(s harden.Step) bool { return s.ID == id })
+	if i < 0 {
+		return harden.Step{}, false
+	}
+	return steps[i], true
+}
+
 func (h hardening) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hardeningMsg:
 		h.loaded, h.steps, h.rec, h.lockWhy = true, msg.steps, msg.rec, msg.lockWhy
-		h.hst = msg.steps[1].State == harden.Done // key-only SSH
+		ssh, _ := stepOf(msg.steps, "ssh") // key-only SSH
+		h.hst = ssh.State == harden.Done
 		h.table.setRows(h.rows())
 		return h, nil
 	case taskDoneMsg:
