@@ -141,7 +141,7 @@ func TestHardeningStatusApplySkippedStep(t *testing.T) {
 	h.write("/var/lib/vpsctl/hardening.json", `{"ran":"2026-10-15T01:12:00Z","by":"root","admin_user":"anh","skipped":["fail2ban"]}`)
 	tm := teatest.NewTestModel(t, New(harden.NewMachine(f2bInstall{h.fake}, h.host, h.root, io.Discard), time.Now()),
 		teatest.WithInitialTermSize(120, 40))
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	tm.Type(menuTo("Hardening"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "[ Apply ]")
