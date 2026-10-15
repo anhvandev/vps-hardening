@@ -16,6 +16,8 @@ func TestSSHScreenFlagsMatchOverrideAndOwnSession(t *testing.T) {
 	global := "port 22\npasswordauthentication no\nkbdinteractiveauthentication no\npubkeyauthentication yes\npermitrootlogin no\n"
 	for k, v := range map[string]string{
 		"getent passwd": "root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000::/home/alice:/bin/bash\nbob:x:1001:1001::/home/bob:/bin/bash\n",
+		"getent group":  "sudo:x:27:alice\n",
+		"getent shadow": "alice:!:19000:0:99999:7:::\nbob:!:19000:0:99999:7:::\n",
 		"sshd -T":       global,
 		"sshd -T -C user=alice,host=localhost,addr=127.0.0.1": global,
 		"sshd -T -C user=bob,host=localhost,addr=127.0.0.1":   strings.Replace(global, "passwordauthentication no", "passwordauthentication yes", 1),

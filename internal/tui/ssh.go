@@ -36,7 +36,11 @@ func (s sshScreen) Init() tea.Cmd {
 		var info sshInfo
 		users, err := s.m.ManagedUsers()
 		if err == nil {
-			info.settings, err = s.m.SSH.Settings(users)
+			var names []string
+			for _, u := range users {
+				names = append(names, u.Name)
+			}
+			info.settings, err = s.m.SSH.Settings(names)
 		}
 		info.settingsErr = err
 		info.sessions, info.sessionsErr = s.m.SSH.Sessions()
