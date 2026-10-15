@@ -110,6 +110,17 @@ func askTTY(question string) (bool, error) {
 		return false, fmt.Errorf("no controlling TTY: %w", err)
 	}
 	defer tty.Close()
+	return ask(tty, question)
+}
+
+// tcflsh is TCFLSH on linux amd64/arm64 (missing from syscall on amd64).
+const tcflsh = 0x540b
+
+// ask prints question on tty and reads the answer. Keys typed earlier
+// (e.g. Enter while harden was busy) are discarded first so they can't
+// answer the question.
+func ask(tty *os.File, question string) (bool, error) {
+	syscall.Syscall(syscall.SYS_IOCTL, tty.Fd(), tcflsh, syscall.TCIFLUSH)
 	fmt.Fprintf(tty, "%s [y/N] ", question)
 	line, err := bufio.NewReader(tty).ReadString('\n')
 	if err != nil && line == "" {
