@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -9,7 +10,17 @@ import (
 // "delete", "restart", ...) on a Unit; a name without a suffix is a .service.
 type UnitAction struct{ Unit, Verb string }
 
-func init() { rules = append(rules, keepProtectedUnits) }
+func init() { rules = append(rules, keepProtectedUnits, keepFail2banUnit) }
+
+// keepFail2banUnit refuses editing or deleting fail2ban's unit: it may be
+// stopped and started, never broken.
+func keepFail2banUnit(_ Facts, action any) error {
+	a, ok := action.(UnitAction)
+	if !ok || (a.Unit != "fail2ban" && a.Unit != "fail2ban.service") || (a.Verb != "edit" && a.Verb != "delete") {
+		return nil
+	}
+	return errors.New("refused: fail2ban.service can be stopped and started, not edited or deleted")
+}
 
 // protected maps each Protected Unit to what losing it would cut.
 var protected = map[string]string{
