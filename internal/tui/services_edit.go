@@ -114,6 +114,9 @@ func (s servicesScreen) editUpdate(msg tea.Msg) (_ servicesScreen, _ tea.Cmd, ok
 				return s, nil, true
 			}
 		}
+		if s.form != nil || s.offer != "" {
+			return s, nil, false
+		}
 		if msg.String() == "E" && s.cursor < len(s.shown()) {
 			unit := s.shown()[s.cursor].Name
 			if err := guard.Check(guard.Facts{}, guard.UnitAction{Unit: unit, Verb: "edit"}); err != nil {
