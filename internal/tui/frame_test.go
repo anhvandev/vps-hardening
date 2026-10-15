@@ -38,7 +38,7 @@ func TestWideFrame(t *testing.T) {
 	v := quitView(t, tm)
 	wantAll(t, v, "prod-sg-01", "Ubuntu 24.04", "2 vCPU · 4 GB", "● Hardened",
 		"SECURITY", "ACCESS", "WORKLOADS", "SYSTEM", "Hardening", "Task History", "? help", "q quit")
-	for _, hidden := range []string{"Logins", "Docker", "Updates", "Swap", "coming soon"} {
+	for _, hidden := range []string{"Docker", "Updates", "Swap", "coming soon"} {
 		if strings.Contains(leftCols(v, 26), hidden) {
 			t.Errorf("unbuilt %q shown:\n%s", hidden, v)
 		}
@@ -132,8 +132,8 @@ func TestClickSidebarOpensScreen(t *testing.T) {
 	waitFor(t, tm, "5432/tcp")
 	tm.Send(click(5, 3)) // row 3: SECURITY, Hardening, Firewall
 	waitFor(t, tm, "esc back")
-	tm.Send(click(5, 8))  // the WORKLOADS heading: nothing happens
-	tm.Send(click(5, 11)) // row 11: … WORKLOADS, Services, Timers, Cron
+	tm.Send(click(5, 9))  // the WORKLOADS heading: nothing happens
+	tm.Send(click(5, 12)) // row 12: … WORKLOADS, Services, Timers, Cron
 	tm.Send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	v := ansi.Strip(tm.FinalModel(t, teatest.WithFinalTimeout(3*time.Second)).View().Content)
 	if !lineHas(v, "SECURITY", "│ Cron") || !strings.Contains(v, "▌ Cron") {
