@@ -218,7 +218,8 @@ func (t Model) taskUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		k.lines = append(k.lines, string(msg))
 	case taskEndMsg:
 		k.ended, k.err, k.end = true, msg.err, time.Now()
-		t.busyNote, t.hardened = false, t.m.SSH.StageBLive()
+		t.busyNote = false
+		t.readHardening()
 		var cmd tea.Cmd
 		t.screen, cmd = t.screen.Update(taskDoneMsg{})
 		return t, cmd

@@ -41,12 +41,20 @@ func debianHost(t *testing.T) *testHost {
 			"systemctl show -p LastTriggerUSec --value apt-daily-upgrade.timer": {Stdout: "Wed 2026-10-14 06:12:03 UTC\n"},
 			"apt-get -s -o Debug::NoLocking=true upgrade":                       {Stdout: "Reading package lists...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"},
 			"df -h -P /": {Stdout: "Filesystem      Size  Used Avail Capacity Mounted on\n/dev/vda1        20G  4.1G   15G      22% /\n"},
+			"sshd -T":    {Stdout: "port 22\npasswordauthentication no\nkbdinteractiveauthentication no\npubkeyauthentication yes\npermitrootlogin no\n"},
 		}},
 	}
 	h.write("/proc/meminfo", "MemTotal:        4194304 kB\nMemFree:          524288 kB\nMemAvailable:    3145728 kB\n")
+	h.write("/etc/ssh/ssh_host_ed25519_key", "k")
 	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 22\n"+
 		"PasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\nPermitRootLogin no\n")
 	return h
+}
+
+// unharden leaves only Stage A live: SSH on 2222, password and root login still on.
+func (h *testHost) unharden() {
+	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 2222\n")
+	h.fake.Results["sshd -T"] = system.Result{Stdout: "port 2222\npasswordauthentication yes\nkbdinteractiveauthentication no\npubkeyauthentication yes\npermitrootlogin yes\n"}
 }
 
 func (h *testHost) write(p, s string) {
@@ -108,8 +116,7 @@ func TestOverviewOnHardenedHost(t *testing.T) {
 
 func TestBannerOnUnhardenedHost(t *testing.T) {
 	h := debianHost(t)
-	// Stage A only: the port is ours, auth hardening is not live yet.
-	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 2222\n")
+	h.unharden()
 	tm := start(h)
 	waitFor(t, tm, "5432/tcp")
 	v := quitView(t, tm)

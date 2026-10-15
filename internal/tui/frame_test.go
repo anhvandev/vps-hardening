@@ -36,7 +36,7 @@ func TestWideFrame(t *testing.T) {
 	tm := startSized(sizedHost(t), 120, 40)
 	waitFor(t, tm, "5432/tcp")
 	v := quitView(t, tm)
-	wantAll(t, v, "prod-sg-01", "Ubuntu 24.04", "2 vCPU · 4 GB", "● Hardened",
+	wantAll(t, v, "prod-sg-01", "Ubuntu 24.04", "2 vCPU · 4 GB", "⚠ Hardening 5/9",
 		"SECURITY", "ACCESS", "WORKLOADS", "SYSTEM", "Hardening", "Task History", "? help", "q quit")
 	for _, hidden := range []string{"Docker", "coming soon"} {
 		if strings.Contains(leftCols(v, 26), hidden) {
@@ -51,13 +51,13 @@ func TestWideFrame(t *testing.T) {
 
 func TestBadgeOnUnhardenedHost(t *testing.T) {
 	h := sizedHost(t)
-	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 2222\n")
+	h.unharden()
 	tm := startSized(h, 120, 40)
 	waitFor(t, tm, "5432/tcp")
 	v := quitView(t, tm)
 	wantAll(t, v, "✗ NOT HARDENED")
-	if strings.Contains(v, "Hardened") {
-		t.Errorf("green badge on unhardened host:\n%s", v)
+	if strings.Contains(v, "Hardening 5/9") {
+		t.Errorf("x/y badge on unhardened host:\n%s", v)
 	}
 }
 
@@ -143,7 +143,7 @@ func TestClickSidebarOpensScreen(t *testing.T) {
 
 func TestClickBadgeOpensHardening(t *testing.T) {
 	h := sizedHost(t)
-	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 2222\n")
+	h.unharden()
 	tm := startSized(h, 120, 40)
 	waitFor(t, tm, "NOT HARDENED")
 	tm.Send(click(110, 0))
@@ -185,7 +185,7 @@ func TestHelpOverlay(t *testing.T) {
 func TestASCIIFallback(t *testing.T) {
 	t.Setenv("LC_ALL", "C")
 	h := sizedHost(t)
-	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 2222\n")
+	h.unharden()
 	tm := startSized(h, 120, 40)
 	waitFor(t, tm, "5432/tcp")
 	v := finalView(t, tm)
