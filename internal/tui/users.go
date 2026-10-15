@@ -47,6 +47,8 @@ func newUsers(m *harden.Machine) tea.Model { return users{m: m} }
 
 func (u users) Init() tea.Cmd { return u.load("") }
 
+func (u users) busy() bool { return u.job != "" }
+
 // load re-reads the Managed Users, then shows status.
 func (u users) load(status string) tea.Cmd {
 	return func() tea.Msg {

@@ -164,6 +164,66 @@ func TestSSHPortChangeStopSafelyRestores(t *testing.T) {
 	}
 }
 
+var ctrlC = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+
+// ctrl+c at the Verify Gate is "Stop safely": the change is restored and the
+// TUI stays open.
+func TestCtrlCAtVerifyGateStopsSafely(t *testing.T) {
+	h, sim := portChangeHost(t)
+	tm := changePort(t, h, sim, "2222")
+	waitFor(t, tm, "Stop safely")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyLeft}) // "Login works" selected
+	tm.Send(ctrlC)
+	waitFor(t, tm, "restored pre-run SSH state")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+	if sim.listening != 22 || !slices.Equal(sim.ufw, []string{"ufw allow 22/tcp", "ufw allow 80/tcp"}) {
+		t.Errorf("listening %d, rules %q", sim.listening, sim.ufw)
+	}
+}
+
+// blockOn holds the command line cmd until release is closed.
+type blockOn struct {
+	system.Runner
+	cmd     string
+	release chan struct{}
+}
+
+func (b blockOn) Run(name string, args ...string) (system.Result, error) {
+	if strings.Join(append([]string{name}, args...), " ") == b.cmd {
+		<-b.release
+	}
+	return b.Runner.Run(name, args...)
+}
+
+// ctrl+c while a gated job runs (before the gate) does not quit: the TUI
+// says it is busy and the job carries on to the Verify Gate.
+func TestCtrlCWhileChangeRunsIsIgnored(t *testing.T) {
+	h, sim := portChangeHost(t)
+	r := blockOn{sim, "ss -Hltun", make(chan struct{})}
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard)), teatest.WithInitialTermSize(120, 40))
+	waitFor(t, tm, "RAM")
+	tm.Type("jjj")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "Active sessions")
+	tm.Type("p2222")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "changing the SSH port")
+	tm.Send(ctrlC)
+	waitFor(t, tm, "busy")
+	close(r.release)
+	waitFor(t, tm, "Stop safely")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "restored pre-run SSH state")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+	if sim.listening != 22 {
+		t.Errorf("listening %d", sim.listening)
+	}
+}
+
 func TestSSHPortChangeRefusesListeningPort(t *testing.T) {
 	h, sim := portChangeHost(t)
 	h.fake.Results["ss -Hltun"] = ssOut // postgres on 5432

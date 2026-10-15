@@ -42,6 +42,8 @@ type sshInfo struct {
 
 func newSSH(m *harden.Machine) tea.Model { return sshScreen{m: m} }
 
+func (s sshScreen) busy() bool { return s.port != 0 }
+
 func (s sshScreen) Init() tea.Cmd {
 	return func() tea.Msg {
 		var info sshInfo

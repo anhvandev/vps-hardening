@@ -9,7 +9,8 @@
 // where the title is one of menu. Menu entries without a registered screen
 // are shown as "coming soon". A screen is a plain tea.Model, built fresh each
 // time it is opened (so it reads the live system then). While open it gets
-// every message, including every key except ctrl+c, and returns the Back
+// every message, including every key except ctrl+c (unless its busy() says a
+// gated job runs), and returns the Back
 // command to hand focus back to the menu. Every change to the host goes
 // through logMutation (global lock + one action-log line); Lockout Guard checks
 // (internal/guard) run inside it, on facts read under the lock.
@@ -57,6 +58,7 @@ type Model struct {
 	focused  bool      // keys go to screen, not the menu
 	hardened bool
 	newer    NewVersionMsg // newer release tag, "" if none known
+	busyNote bool          // ctrl+c was pressed while a gated job runs
 }
 
 // New opens the TUI on the Overview, with the menu focused.
@@ -80,11 +82,20 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return t, tea.Batch(tea.Exec(msg.term, nil), msg.wait)
 		}
 		if msg.ask == nil { // a job finished: it may have hardened the host
-			t.hardened = t.m.SSH.StageBLive()
+			t.hardened, t.busyNote = t.m.SSH.StageBLive(), false
 		}
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
-			return t, tea.Quit
+			// A running gated job is never abandoned (Stage A would stay
+			// without restore): the screen gets ctrl+c instead, which at the
+			// Verify Gate means "Stop safely".
+			if b, ok := t.screen.(interface{ busy() bool }); !ok || !b.busy() {
+				return t, tea.Quit
+			}
+			t.busyNote = true
+			var cmd tea.Cmd
+			t.screen, cmd = t.screen.Update(msg)
+			return t, cmd
 		}
 		if !t.focused {
 			return t.menuKey(msg.String())
@@ -169,6 +180,9 @@ func (t Model) View() tea.View {
 	help := "↑/↓ move · enter open · q quit"
 	if t.focused {
 		help = "esc back · ctrl+c quit"
+	}
+	if t.busyNote {
+		help = "busy: a change is running and quits only once it ends (ctrl+c at the Verify Gate = Stop safely)"
 	}
 	b.WriteString(dimStyle.Render(help))
 	if t.newer != "" {

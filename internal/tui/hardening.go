@@ -49,6 +49,8 @@ func newHardening(m *harden.Machine) tea.Model {
 
 func (h hardening) Init() tea.Cmd { return nil }
 
+func (h hardening) busy() bool { return h.running }
+
 func (h hardening) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case gateMsg:
