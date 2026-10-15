@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/harden"
+	"github.com/anhvandev/vpsctl/internal/release"
 	"github.com/anhvandev/vpsctl/internal/system"
 	"github.com/anhvandev/vpsctl/internal/tui"
 )
@@ -30,6 +32,7 @@ var lock = actionlog.Lock
 const usage = `usage: vpsctl                 (management TUI)
        vpsctl harden --user NAME [--port N] [--yes] [--key-out PATH] [--rotate-key]
                      [--skip-firewall] [--skip-fail2ban] [--skip-updates] [--skip-sysctl]
+       vpsctl self-update
        vpsctl version`
 
 func main() {
@@ -41,6 +44,8 @@ func main() {
 		fmt.Println(version)
 	case "harden":
 		os.Exit(runHarden(os.Args[2:]))
+	case "self-update":
+		os.Exit(runSelfUpdate())
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
@@ -111,6 +116,48 @@ func runHarden(args []string) int {
 	}
 	actionlog.Append(actionlog.LogPath, "harden "+strings.Join(args, " "), result) // failures to log are ignored
 	return code
+}
+
+// runSelfUpdate replaces the running binary with the latest release.
+func runSelfUpdate() int {
+	if err := system.Preflight(os.Geteuid(), "/run/systemd/system"); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	return selfUpdate(release.BaseURL, exe, actionlog.LockPath, actionlog.LogPath, os.Stdout)
+}
+
+// selfUpdate updates exe from the releases at base under the global lock and
+// logs "self-update <old> → <new>" to the action log at logPath.
+func selfUpdate(base, exe, lockPath, logPath string, out io.Writer) int {
+	lk, err := lock(lockPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	defer lk.Close()
+
+	tag, err := release.Update(base, version, exe)
+	switch {
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "ERROR: self-update:", err)
+		actionlog.Append(logPath, "self-update "+version, "failed")
+		return 1
+	case tag == version:
+		fmt.Fprintln(out, "vpsctl", version, "is already the latest release")
+		return 0
+	}
+	fmt.Fprintf(out, "vpsctl updated %s → %s\n", version, tag)
+	actionlog.Append(logPath, "self-update "+version+" → "+tag, "ok")
+	return 0
 }
 
 func hardenHost(o harden.Options, out io.Writer) error {
