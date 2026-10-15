@@ -209,6 +209,9 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		t.screen, cmd = t.screen.Update(msg)
 		return t, cmd
 	case tea.MouseWheelMsg:
+		if k := t.task; k != nil && k.shown && k.ended && k.full { // the wheel scrolls the full output
+			return t.scrollOutput(map[tea.MouseButton]int{tea.MouseWheelUp: 3, tea.MouseWheelDown: -3}[msg.Button]), nil
+		}
 		x, y, ok := t.local(msg.X, msg.Y)
 		if !ok || t.help || t.task != nil && t.task.shown {
 			return t, nil

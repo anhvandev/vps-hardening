@@ -133,6 +133,7 @@ type task struct {
 	start, end    time.Time
 	shown         bool         // the panel is up (else it lives in the status bar)
 	full          bool         // the result card shows the output
+	scroll        int          // lines the shown output is scrolled up from the newest
 	gate          *taskGateMsg // the Verify Gate waiting for its answer
 	works         bool         // at the gate: "Login works" selected
 	events        <-chan tea.Msg
@@ -323,6 +324,12 @@ func (t Model) panelKey(key string) (tea.Model, tea.Cmd) {
 		t = t.panelButton(map[bool]string{false: "Hide", true: "Close"}[t.task.ended])
 	case key == "o" && t.task.ended:
 		t = t.panelButton("View full output")
+	case t.task.ended && t.task.full: // scroll the output
+		n := len(t.task.lines)
+		if d, ok := map[string]int{"up": 1, "k": 1, "down": -1, "j": -1, "pgup": 10, "pgdown": -10,
+			"home": n, "g": n, "end": -n, "G": -n}[key]; ok {
+			t = t.scrollOutput(d)
+		}
 	}
 	return t, nil
 }
@@ -407,6 +414,52 @@ func (t Model) taskStatus() string {
 	return okStyle.Render(glyph("✓")+" "+k.name+": Done") + "   (click to open)"
 }
 
+// result is the ended Task's state (the panel's title) and card body above
+// the output, cw columns wide.
+func (t Model) result(cw int) (state string, body []string) {
+	k := t.task
+	if errors.Is(k.err, harden.ErrStopped) {
+		state = warnStyle.Render(glyph("⚠") + " Stopped")
+		reason := fmt.Sprintf("step %d/%d %q: %s", k.cur+1, len(k.steps), k.steps[k.cur], k.err)
+		return state, strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")
+	}
+	if k.err != nil {
+		state = errStyle.Render(glyph("✗") + " Failed")
+		reason := fmt.Sprintf("step %d/%d %q: %s", k.cur+1, len(k.steps), k.steps[k.cur], k.err)
+		return state, strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")
+	}
+	state = okStyle.Render(glyph("✓") + " Done in " + mmss(k.end.Sub(k.start)))
+	if len(k.warned) > 0 {
+		state = warnStyle.Render(glyph("⚠") + " Done with warnings in " + mmss(k.end.Sub(k.start)))
+	}
+	for i, l := range strings.Split(k.summary, "\n") {
+		body = append(body, map[bool]string{true: "SUMMARY  ", false: "         "}[i == 0]+l)
+	}
+	for _, i := range k.warned {
+		body = append(body, warnStyle.Render(glyph("⚠")+" "+k.steps[i]+": not applied, see the output"))
+	}
+	return state, body
+}
+
+// panelSize is the Task panel's width and height in the frame.
+func (t Model) panelSize() (w, h int) {
+	cw, rows := t.w-3, t.h-6
+	if t.w >= collapseBelow {
+		cw, rows = t.w-4-sideW, t.h-4
+	}
+	return min(cw-2, 76), rows - 1
+}
+
+// scrollOutput moves the result card's full output d lines up (down if
+// negative), within the output.
+func (t Model) scrollOutput(d int) Model {
+	w, h := t.panelSize()
+	_, body := t.result(w - 4)
+	rows := max(h-len(body)-4, 1) // as panel shows it
+	t.task.scroll = min(max(t.task.scroll+d, 0), max(len(t.task.lines)-rows, 0))
+	return t
+}
+
 // panel is the Task panel, w columns wide and at most h lines high.
 func (t Model) panel(w, h int) []string {
 	k, bd := t.task, lipgloss.RoundedBorder()
@@ -416,10 +469,11 @@ func (t Model) panel(w, h int) []string {
 	cw := w - 4 // content columns
 	var body []string
 	var state string
-	output := func(rows int) {
-		ls := k.lines[max(len(k.lines)-max(rows, 1), 0):]
+	output := func(rows int) { // the newest rows lines, or k.scroll lines up from them
+		rows = max(rows, 1)
+		end := len(k.lines) - min(k.scroll, max(len(k.lines)-rows, 0))
 		body = append(body, bd.Top+" output "+strings.Repeat(bd.Top, max(cw-8, 0)))
-		body = append(body, ls...)
+		body = append(body, k.lines[max(end-rows, 0):end]...)
 	}
 	switch {
 	case !k.ended:
@@ -456,26 +510,7 @@ func (t Model) panel(w, h int) []string {
 		btn := "[ Hide ]  (keeps running in the status bar)"
 		body = append(body, strings.Repeat(" ", max(cw-ansi.StringWidth(btn), 0))+btn)
 	default:
-		if errors.Is(k.err, harden.ErrStopped) {
-			state = warnStyle.Render(glyph("⚠") + " Stopped")
-			reason := fmt.Sprintf("step %d/%d %q: %s", k.cur+1, len(k.steps), k.steps[k.cur], k.err)
-			body = append(body, strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")...)
-		} else if k.err != nil {
-			state = errStyle.Render(glyph("✗") + " Failed")
-			reason := fmt.Sprintf("step %d/%d %q: %s", k.cur+1, len(k.steps), k.steps[k.cur], k.err)
-			body = append(body, strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")...)
-		} else {
-			state = okStyle.Render(glyph("✓") + " Done in " + mmss(k.end.Sub(k.start)))
-			if len(k.warned) > 0 {
-				state = warnStyle.Render(glyph("⚠") + " Done with warnings in " + mmss(k.end.Sub(k.start)))
-			}
-			for i, l := range strings.Split(k.summary, "\n") {
-				body = append(body, map[bool]string{true: "SUMMARY  ", false: "         "}[i == 0]+l)
-			}
-			for _, i := range k.warned {
-				body = append(body, warnStyle.Render(glyph("⚠")+" "+k.steps[i]+": not applied, see the output"))
-			}
-		}
+		state, body = t.result(cw)
 		if k.full {
 			output(h - len(body) - 4)
 		}

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -58,6 +59,43 @@ func TestFirewallOpenPortTask(t *testing.T) {
 		t.Errorf("Task History:\n%s", log)
 	}
 	wantAll(t, oneOutput(t, h), "Open port 8080/tcp", "[step 1/1] Allow 8080/tcp", "$ ufw allow 8080/tcp", "Rule added (v6)", "Done: opened 8080/tcp")
+}
+
+// The full output of a long Task scrolls: it opens at the newest lines,
+// ↑/pgup and the wheel go back to the first ones, end to the newest.
+func TestTaskFullOutputScrolls(t *testing.T) {
+	// fullOutput runs a Task with 100 output lines, shows its full output,
+	// sends msgs and returns the last frame.
+	fullOutput := func(msgs ...tea.Msg) string {
+		h := debianHost(t)
+		var out strings.Builder
+		for i := range 100 {
+			fmt.Fprintf(&out, "output line %03d\n", i)
+		}
+		h.fake.Results["ufw allow 8080/tcp"] = system.Result{Stdout: out.String()}
+		tm := openFirewall(t, h)
+		tm.Type("a8080/tcp")
+		tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+		waitFor(t, tm, "SUMMARY  opened 8080/tcp")
+		tm.Type("o")
+		waitFor(t, tm, "output line 099")
+		for _, m := range msgs {
+			tm.Send(m)
+		}
+		return ctrlCView(t, tm)
+	}
+	var up []tea.Msg
+	for range 40 {
+		up = append(up, tea.MouseWheelMsg{X: 60, Y: 10, Button: tea.MouseWheelUp})
+	}
+	if v := fullOutput(append(up, tea.KeyPressMsg{Code: tea.KeyPgUp})...); !strings.Contains(v, "output line 000") {
+		t.Errorf("wheel and pgup don't reach the first line:\n%s", v)
+	}
+	v := fullOutput(tea.KeyPressMsg{Code: tea.KeyHome}, tea.KeyPressMsg{Code: tea.KeyEnd},
+		tea.KeyPressMsg{Code: tea.KeyUp}, tea.KeyPressMsg{Code: tea.KeyDown})
+	if !strings.Contains(v, "output line 099") || strings.Contains(v, "output line 000") {
+		t.Errorf("end does not go back to the newest lines:\n%s", v)
+	}
 }
 
 // A running Task shows its steps and live output; it can be hidden into the
