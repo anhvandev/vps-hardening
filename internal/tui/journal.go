@@ -6,19 +6,20 @@ import (
 	"io"
 	"strings"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/service"
 )
 
-const (
-	journalTail = 200 // journal lines read and kept; never the whole history
-	journalRows = 20  // journal lines drawn; ↑/↓ scroll the rest
-)
+const journalTail = 200 // journal lines read and kept; never the whole history
 
 // journalView shows a Service's recent journal over the Services list it was
-// opened from; f toggles live follow, esc stops it and returns to that list.
+// opened from, in a viewport (↑↓/jk, pgup/pgdn, wheel); f toggles live
+// follow, which keeps the newest line in view unless scrolled up; esc stops
+// it and returns to that list.
 type journalView struct {
 	back   tea.Model // the Services list
 	m      *harden.Machine
@@ -26,7 +27,7 @@ type journalView struct {
 	loaded bool
 	lines  []string
 	err    error // journal unreadable
-	scroll int   // lines scrolled up from the newest
+	vp     viewport.Model
 	follow *journalStream
 	status string // why following stopped, "" if it did not
 }
@@ -68,18 +69,39 @@ func (j journalView) stopFollow() journalView {
 	return j
 }
 
-// openJournal opens unit's journal on top of back and starts reading its tail.
-func openJournal(back tea.Model, m *harden.Machine, unit string) (tea.Model, tea.Cmd) {
-	return journalView{back: back, m: m, unit: unit}, func() tea.Msg {
+// openJournal opens unit's journal on top of back, sized w×h, and starts
+// reading its tail.
+func openJournal(back tea.Model, m *harden.Machine, unit string, w, h int) (tea.Model, tea.Cmd) {
+	j := journalView{back: back, m: m, unit: unit, vp: viewport.New()}
+	j.size(w, h)
+	return j, func() tea.Msg {
 		lines, err := service.Journal(m.R, unit, journalTail)
 		return journalMsg{lines, err}
+	}
+}
+
+// size fits the viewport between the title and the buttons.
+func (j *journalView) size(w, h int) {
+	j.vp.SetWidth(max(w, 20))
+	j.vp.SetHeight(max(h-5, 3))
+}
+
+// setLines shows lines, staying at the newest if it was there.
+func (j *journalView) setLines(lines []string) {
+	bottom := j.vp.AtBottom()
+	j.lines = lines[max(len(lines)-journalTail, 0):]
+	j.vp.SetContentLines(j.lines)
+	if bottom {
+		j.vp.GotoBottom()
 	}
 }
 
 func (j journalView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case journalMsg:
-		j.lines, j.err, j.loaded = msg.lines, msg.err, true
+		j.err, j.loaded = msg.err, true
+		j.setLines(msg.lines)
+		j.vp.GotoBottom()
 	case journalLineMsg:
 		if msg.st != j.follow {
 			return j, nil
@@ -88,9 +110,19 @@ func (j journalView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			j.status = "follow ended: " + msg.err.Error()
 			return j.stopFollow(), nil
 		}
-		j.lines = append(j.lines, msg.line)
-		j.lines = j.lines[max(len(j.lines)-journalTail, 0):]
+		j.setLines(append(j.lines, msg.line))
 		return j, msg.st.next
+	case tea.WindowSizeMsg:
+		j.size(msg.Width, msg.Height)
+		var cmd tea.Cmd
+		j.back, cmd = j.back.Update(msg)
+		return j, cmd
+	case tea.MouseWheelMsg:
+		j.vp, _ = j.vp.Update(msg)
+	case tea.MouseClickMsg:
+		if m := mouse(j.layout(), msg); m != nil {
+			return j.Update(m)
+		}
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "esc":
@@ -105,14 +137,14 @@ func (j journalView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				j.status = "cannot follow: " + err.Error()
 				return j, nil
 			}
-			j.follow, j.lines, j.err, j.scroll, j.status = &journalStream{rc, bufio.NewScanner(rc)}, nil, nil, 0, ""
+			j.follow, j.err, j.status = &journalStream{rc, bufio.NewScanner(rc)}, nil, ""
+			j.setLines(nil)
+			j.vp.GotoBottom()
 			return j, j.follow.next
-		case "up", "k":
-			j.scroll = min(j.scroll+1, max(len(j.lines)-journalRows, 0))
-		case "down", "j":
-			j.scroll = max(j.scroll-1, 0)
+		default:
+			j.vp, _ = j.vp.Update(msg)
 		}
-	default: // e.g. the outcome of a lifecycle action still running
+	default: // e.g. a refresh tick, or a Task ending
 		var cmd tea.Cmd
 		j.back, cmd = j.back.Update(msg)
 		return j, cmd
@@ -122,25 +154,30 @@ func (j journalView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (j journalView) Init() tea.Cmd { return nil }
 
-func (j journalView) View() tea.View {
-	var b strings.Builder
-	state := "not following"
+func (j journalView) typing() bool { return false }
+
+func (j journalView) keys() string { return "↑↓ scroll · f follow · esc back" }
+
+func (j journalView) layout() *lipgloss.Compositor {
+	state, follow := "not following", "Follow"
 	if j.follow != nil {
-		state = "following live"
+		state, follow = "following live", "Stop following"
 	}
-	b.WriteString(titleStyle.Render("Journal: "+j.unit) + "  " + dimStyle.Render(state) + "\n\n")
+	body := j.vp.View()
 	switch {
 	case !j.loaded:
-		b.WriteString("loading…")
+		body = "loading…"
 	case j.err != nil:
-		b.WriteString("journal unreadable: " + j.err.Error())
-	default:
-		end := len(j.lines) - j.scroll
-		b.WriteString(strings.Join(j.lines[max(end-journalRows, 0):end], "\n"))
+		body = "journal unreadable: " + j.err.Error()
 	}
-	b.WriteString("\n\n" + dimStyle.Render("f follow · ↑/↓ scroll · esc back"))
+	blocks := []any{titleStyle.Render("Journal: "+j.unit) + "  " + dimStyle.Render(state), body,
+		buttonRow(button{"f", follow, ""}, button{"esc", "Back", ""})}
 	if j.status != "" {
-		b.WriteString("\n\n" + j.status)
+		blocks = append(blocks, j.status)
 	}
-	return tea.NewView(b.String())
+	return stack(blocks...)
+}
+
+func (j journalView) View() tea.View {
+	return tea.NewView(strings.TrimRight(j.layout().Render(), "\n"))
 }

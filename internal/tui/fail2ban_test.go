@@ -153,11 +153,8 @@ func (r *newBan) Run(name string, args ...string) (system.Result, error) {
 	return r.Fake.Run(name, args...)
 }
 
-// While open, the screen re-reads fail2ban on its own.
+// While open, the screen re-reads fail2ban on each refresh tick.
 func TestFail2banAutoRefreshes(t *testing.T) {
-	old := autoRefresh
-	autoRefresh = 20 * time.Millisecond
-	t.Cleanup(func() { autoRefresh = old })
 	h := f2bHost(t)
 	r := &newBan{Fake: h.fake}
 	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
@@ -166,6 +163,7 @@ func TestFail2banAutoRefreshes(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "198.51.100.7")
 	r.banned.Store(true)
+	tm.Send(refreshMsg{})
 	waitFor(t, tm, "203.0.113.99")
 	ctrlCView(t, tm)
 }

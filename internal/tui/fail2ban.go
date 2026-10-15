@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -17,15 +16,11 @@ import (
 
 func init() { screens["fail2ban"] = newFail2ban }
 
-// autoRefresh is how often screens that refresh on their own re-read the host.
-var autoRefresh = 5 * time.Second
-
-// f2bScreen lists jails and banned IPs, re-read every autoRefresh while open;
+// f2bScreen lists jails and banned IPs, re-read on every refresh tick while open;
 // u unbans the selected IP and a adds an IP or CIDR (the operator's session
 // IP suggested) to the ignore list in vpsctl's jail drop-in, each as a Task.
 type f2bScreen struct {
 	m      *harden.Machine
-	id     *byte     // this screen's refresh chain (a reopened screen starts another)
 	state  *f2bState // nil while loading
 	table  table
 	adding bool // the ignore-list form is up
@@ -41,26 +36,17 @@ type f2bState struct {
 	ignore []string       // ignoreip in the drop-in
 }
 
-// f2bMsg is a read of fail2ban; chain is the screen whose refresh chain
-// asked for it (nil for a one-off reload).
-type f2bMsg struct {
-	state *f2bState
-	chain *byte
-}
-
-// f2bTickMsg is time for chain's next refresh.
-type f2bTickMsg struct{ chain *byte }
+// f2bMsg is a read of fail2ban.
+type f2bMsg struct{ state *f2bState }
 
 func newFail2ban(m *harden.Machine) tea.Model {
-	return f2bScreen{m: m, id: new(byte), table: newTable("JAIL", "BANNED IP")}
+	return f2bScreen{m: m, table: newTable("JAIL", "BANNED IP")}
 }
 
-// Init reads fail2ban and starts the refresh chain: each read of the chain
-// arms the next tick, so reads never overlap.
-func (f f2bScreen) Init() tea.Cmd { return f.load(f.id) }
+func (f f2bScreen) Init() tea.Cmd { return f.load() }
 
-func (f f2bScreen) load(chain *byte) tea.Cmd {
-	return func() tea.Msg { return f2bMsg{readF2b(f.m), chain} }
+func (f f2bScreen) load() tea.Cmd {
+	return func() tea.Msg { return f2bMsg{readF2b(f.m)} }
 }
 
 func readF2b(m *harden.Machine) *f2bState {
@@ -94,17 +80,9 @@ func (f f2bScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case f2bMsg:
 		f.state = msg.state
 		f.table.setRows(f.tableRows())
-		if msg.chain != f.id {
-			return f, nil
-		}
-		return f, tea.Tick(autoRefresh, func(time.Time) tea.Msg { return f2bTickMsg{f.id} })
-	case f2bTickMsg:
-		if msg.chain != f.id {
-			return f, nil
-		}
-		return f, f.load(f.id)
-	case taskDoneMsg:
-		return f, f.load(nil)
+		return f, nil
+	case refreshMsg, taskDoneMsg:
+		return f, f.load()
 	case tea.MouseClickMsg:
 		if m := mouse(f.layout(), msg); m != nil {
 			return f.Update(m)
@@ -135,7 +113,7 @@ func (f f2bScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return f, runTask("Unban "+b.IP, "fail2ban unban "+b.IP+" "+b.Jail, "unbanned "+b.IP+" from "+b.Jail,
 			taskStep{"Unban " + b.IP + " in " + b.Jail, func(r system.Runner, _ io.Writer) error { return fail2ban.Unban(r, b) }})
 	case "r":
-		return f, f.load(nil)
+		return f, f.load()
 	}
 	return f, nil
 }
