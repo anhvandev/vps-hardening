@@ -64,6 +64,9 @@ type backMsg struct{}
 // Back is the command a screen returns to give focus back to the menu.
 func Back() tea.Msg { return backMsg{} }
 
+// openMsg asks the shell to open the screen titled by it (a screen's shortcut to another).
+type openMsg string
+
 // NewVersionMsg tells the shell a newer release exists (its tag); the shell
 // shows a notice and never updates on its own.
 type NewVersionMsg string
@@ -141,6 +144,8 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		t.focused = false
 		t.hardened = t.m.SSH.StageBLive()
 		return t, nil
+	case openMsg:
+		return t.open(string(msg))
 	case NewVersionMsg:
 		t.newer = msg
 		return t, nil
