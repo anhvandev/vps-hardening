@@ -1,12 +1,17 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/sshd"
 )
@@ -17,9 +22,15 @@ var warnStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
 
 // sshScreen shows the effective sshd config (Match overrides flagged) and the
 // active SSH sessions. It offers no switch that could weaken Hardening.
+// p changes the port through harden.ChangeSSH and the Verify Gate dialog.
 type sshScreen struct {
-	m    *harden.Machine
-	info *sshInfo // nil while loading
+	m       *harden.Machine
+	info    *sshInfo // nil while loading
+	editing bool     // the new-port prompt is up
+	input   string
+	port    int         // port being changed to; 0 = no change running
+	gate    *verifyGate // non-nil while the change waits at the Verify Gate
+	status  string      // outcome of the last change, or an input error
 }
 
 type sshInfo struct {
@@ -52,15 +63,94 @@ func (s sshScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case *sshInfo:
 		s.info = msg
+	case gateMsg:
+		if msg.ask != nil {
+			g := newVerifyGate(msg, s.m.Root, s.port, os.Getenv("SUDO_USER"))
+			s.gate = &g
+			return s, nil
+		}
+		s.status = fmt.Sprintf("SSH port changed to %d", s.port)
+		if msg.err != nil {
+			s.status = "ERROR: " + msg.err.Error()
+		}
+		s.port = 0
+		return s, s.Init()
 	case tea.KeyPressMsg:
-		if msg.String() == "esc" {
+		switch {
+		case s.gate != nil:
+			g, cmd := s.gate.Update(msg)
+			if s.gate = &g; cmd != nil {
+				s.gate = nil
+			}
+			return s, cmd
+		case s.editing:
+			return s.promptKey(msg)
+		case s.port != 0: // a change is running: stay open for its messages
+		case msg.String() == "esc":
 			return s, Back
+		case msg.String() == "p":
+			s.editing, s.input, s.status = true, "", ""
 		}
 	}
 	return s, nil
 }
 
+// promptKey edits the new-port prompt; enter validates, then starts the change.
+func (s sshScreen) promptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		s.editing, s.status = false, ""
+	case "backspace":
+		if r := []rune(s.input); len(r) > 0 {
+			s.input = string(r[:len(r)-1])
+		}
+	case "enter":
+		port, err := strconv.Atoi(strings.TrimSpace(s.input))
+		switch {
+		case err != nil || port < 1 || port > 65535:
+			s.status = "port must be 1-65535"
+		case os.Getenv("SUDO_USER") == "":
+			s.status = "run vpsctl with sudo as your Admin User: the Verify Gate needs one to log in as"
+		default:
+			s.editing, s.status, s.port = false, "", port
+			return s, s.changePort(port, os.Getenv("SUDO_USER"))
+		}
+	default:
+		s.input += msg.Text
+	}
+	return s, nil
+}
+
+// changePort moves SSH to port with the two-stage change, the Verify Gate
+// for user in between, unless the Lockout Guard refuses on facts read under
+// the lock.
+func (s sshScreen) changePort(port int, user string) tea.Cmd {
+	return runGated(s.m.Root, fmt.Sprintf("ssh port %d", port), func(ask func(string) (bool, error)) error {
+		cur, err := s.m.CurrentPort()
+		if err != nil {
+			return err
+		}
+		var listening []int // nil when ss failed
+		for _, l := range listeners(s.m.R) {
+			if l.proto == "tcp" {
+				listening = append(listening, l.port)
+			}
+		}
+		if err := guard.Check(guard.Facts{SSHPort: cur, Listening: listening}, guard.ChangeSSHPort{Port: port}); err != nil {
+			return err
+		}
+		_, err = harden.ChangeSSH(harden.Options{User: user, Port: port}, s.m, io.Discard, ask)
+		if errors.Is(err, harden.ErrStopped) {
+			return fmt.Errorf("%w: SSH stays on port %d", err, cur)
+		}
+		return err
+	})
+}
+
 func (s sshScreen) View() tea.View {
+	if s.gate != nil {
+		return tea.NewView(s.gate.View())
+	}
 	if s.info == nil {
 		return tea.NewView(titleStyle.Render("SSH") + "\n\nloading…")
 	}
@@ -91,6 +181,18 @@ func (s sshScreen) View() tea.View {
 		if se.Own {
 			b.WriteString(" (you)")
 		}
+	}
+	b.WriteString("\n\n")
+	switch {
+	case s.editing:
+		b.WriteString("New SSH port: " + s.input + "█\n" + dimStyle.Render("enter change (with the Verify Gate) · esc cancel"))
+	case s.port != 0:
+		fmt.Fprintf(&b, "changing the SSH port to %d…", s.port)
+	default:
+		b.WriteString(dimStyle.Render("p change the SSH port"))
+	}
+	if s.status != "" {
+		b.WriteString("\n\n" + s.status)
 	}
 	return tea.NewView(b.String())
 }
