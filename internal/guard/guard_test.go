@@ -49,3 +49,16 @@ func TestRefusalNamesTheSSHPort(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+func TestChangeSSHPortRefusesAnotherListeningPort(t *testing.T) {
+	facts := Facts{SSHPort: 22, Listening: []int{22, 5432}}
+	for port, refuse := range map[int]bool{2222: false, 5432: true} {
+		err := Check(facts, ChangeSSHPort{port})
+		if refused := err != nil; refused != refuse {
+			t.Errorf("port %d: refused = %v (%v), want %v", port, refused, err, refuse)
+		}
+	}
+	if err := Check(facts, ChangeSSHPort{5432}); err == nil || err.Error() != "refused: port 5432 is already a Listening Port" {
+		t.Errorf("err = %v", err)
+	}
+}
