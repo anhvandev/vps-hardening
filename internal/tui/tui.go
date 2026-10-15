@@ -40,7 +40,7 @@ var menu = []struct {
 	{"SECURITY", []string{"Hardening", "Firewall", "SSH", "fail2ban", "Logins"}},
 	{"ACCESS", []string{"Users"}},
 	{"WORKLOADS", []string{"Services", "Timers", "Cron", "Docker"}},
-	{"SYSTEM", []string{"Overview", "Updates", "Disk", "Swap", "Action log"}},
+	{"SYSTEM", []string{"Overview", "Updates", "Disk", "Swap", "Task History"}},
 }
 
 // items is the menu titles that have a screen, in sidebar order.
