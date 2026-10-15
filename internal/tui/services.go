@@ -21,7 +21,7 @@ const serviceRows = 20
 // default, all with a; / types a name filter. s/x/r/e/d start, stop, restart,
 // enable and disable the selected Service (Protected Units refused); l opens
 // its journal (journal.go); E edits its override in $EDITOR, U reverts it
-// (services_edit.go); n opens the new-Service form (services_create.go).
+// (unit_edit.go); n opens the new-Service form (services_create.go).
 type servicesScreen struct {
 	m         *harden.Machine
 	loaded    bool
@@ -118,6 +118,40 @@ func (s servicesScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return s, nil
+}
+
+// editUpdate runs the override edit/revert flow (unit_edit.go), and the
+// Advanced create's apply; ok is false for anything else.
+func (s servicesScreen) editUpdate(msg tea.Msg) (_ servicesScreen, _ tea.Cmd, ok bool) {
+	switch msg := msg.(type) {
+	case appliedMsg:
+		r, ok := msg.reloaded.(servicesMsg)
+		if !ok || s.edit == nil {
+			return s, nil, false
+		}
+		s.list, s.err, s.status = r.list, r.err, r.status
+		if !msg.ok {
+			s.edit.failed = true
+			return s, nil, true
+		}
+		if s.edit.create {
+			s.form, s.offer = nil, s.edit.unit
+			s = s.selectUnit(s.edit.unit)
+		}
+		s.edit.close()
+		s.edit = nil
+		return s, nil, true
+	case tea.KeyPressMsg:
+		if s.filtering {
+			return s, nil, false
+		}
+	}
+	unit := ""
+	if s.form == nil && s.offer == "" && s.cursor < len(s.shown()) {
+		unit = s.shown()[s.cursor].Name
+	}
+	cmd, ok := overrideFlow{s.m, "service", "[Service]\n", s.reload}.update(&s.edit, &s.status, msg, unit)
+	return s, cmd, ok
 }
 
 // act runs verb on unit through logMutation, then re-reads the Services and

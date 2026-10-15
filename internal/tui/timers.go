@@ -17,7 +17,7 @@ func init() { screens["Timers"] = newTimers }
 
 // timersScreen lists Timers read live, with their next run and target Service.
 // n opens the new-Timer form (created, enabled and started on enter); E edits
-// the selected Timer's override in $EDITOR, U reverts it (timers_edit.go).
+// the selected Timer's override in $EDITOR, U reverts it (unit_edit.go).
 type timersScreen struct {
 	m      *harden.Machine
 	loaded bool
@@ -88,6 +88,37 @@ func (s timersScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return s, nil
+}
+
+// editUpdate runs the override edit/revert flow (unit_edit.go); ok is false
+// for anything else.
+func (s timersScreen) editUpdate(msg tea.Msg) (_ timersScreen, _ tea.Cmd, ok bool) {
+	switch msg := msg.(type) {
+	case appliedMsg:
+		r, ok := msg.reloaded.(timersMsg)
+		if !ok || s.edit == nil {
+			return s, nil, false
+		}
+		s.list, s.err, s.status = r.list, r.err, r.status
+		if msg.ok {
+			s.edit.close()
+			s.edit = nil
+		} else {
+			s.edit.failed = true
+		}
+		return s, nil, true
+	case tea.KeyPressMsg:
+		if s.form != nil {
+			return s, nil, false
+		}
+	}
+	unit := ""
+	if s.cursor < len(s.list) {
+		unit = s.list[s.cursor].Name
+	}
+	flow := overrideFlow{s.m, "timer", "# An empty OnCalendar= first clears the vendor schedule.\n[Timer]\n", s.reload}
+	cmd, ok := flow.update(&s.edit, &s.status, msg, unit)
+	return s, cmd, ok
 }
 
 func (s timersScreen) formKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
