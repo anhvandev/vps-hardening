@@ -187,7 +187,7 @@ func (h hardening) typing() bool { return !h.hst || h.table.typing() }
 func (h hardening) keys() string {
 	switch {
 	case !h.hst:
-		return "esc back · ctrl+c quit"
+		return h.form.keys()
 	case h.table.typing():
 		return h.table.keys()
 	}
@@ -218,9 +218,9 @@ func (h hardening) rows() [][]string {
 	return rows
 }
 
-// layout is the header (when Hardening ran, by whom, the Admin User), the
+// statusLayout is the header (when Hardening ran, by whom, the Admin User), the
 // steps table and Apply all missing.
-func (h hardening) layout() *lipgloss.Compositor {
+func (h hardening) statusLayout() *lipgloss.Compositor {
 	title, note := titleStyle.Render("Hardening"), dimStyle.Render("no Hardening Record")
 	if r := h.rec; r != nil && !r.Ran.IsZero() { // per-step Apply alone records no run
 		note = "ran " + r.Ran.Format("2006-01-02 15:04") + " by " + r.By + " · Admin User " + r.Admin

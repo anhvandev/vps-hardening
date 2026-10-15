@@ -82,9 +82,9 @@ func unhardenedHost(t *testing.T) (*testHost, *hardenSim, *fakeTTY, *io.PipeWrit
 	return h, &hardenSim{sshSim: ssh, users: map[string]string{}}, &fakeTTY{in: r}, w
 }
 
-// startWizard opens the TUI on sim with tty as the terminal, opens the
-// Hardening wizard with h, types user and runs it.
-func startWizard(t *testing.T, h *testHost, sim *hardenSim, tty *fakeTTY, user string) *teatest.TestModel {
+// openWizard opens the TUI on sim with tty as the terminal and opens the
+// Hardening wizard with h.
+func openWizard(t *testing.T, h *testHost, sim *hardenSim, tty *fakeTTY) *teatest.TestModel {
 	t.Helper()
 	m := harden.NewMachine(sim, h.host, h.root, io.Discard)
 	m.OpenTTY = func() (io.ReadWriteCloser, error) { return tty, nil }
@@ -92,6 +92,13 @@ func startWizard(t *testing.T, h *testHost, sim *hardenSim, tty *fakeTTY, user s
 	waitFor(t, tm, "NOT HARDENED")
 	tm.Type("h")
 	waitFor(t, tm, "Admin user")
+	return tm
+}
+
+// startWizard opens the Hardening wizard, types user and runs it.
+func startWizard(t *testing.T, h *testHost, sim *hardenSim, tty *fakeTTY, user string) *teatest.TestModel {
+	t.Helper()
+	tm := openWizard(t, h, sim, tty)
 	tm.Type(user)
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	return tm
@@ -168,14 +175,44 @@ func TestHardeningWizardValidatesLikeCLI(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
 	tm.Type("2222")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown}) // Skip firewall
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown}) // Steps, on Firewall
 	tm.Send(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "cannot be combined with --skip-firewall")
-	ctrlCView(t, tm)
+	wantAll(t, ctrlCView(t, tm), "[ ] Firewall", "[x] fail2ban")
 	if al := actionLog(t, h); strings.Contains(al, "2222") {
 		t.Errorf("rejected input ran:\n%s", al)
+	}
+}
+
+// The wizard is design §2b: the private key can be saved to a file instead
+// of shown once.
+func TestHardeningWizardSavesKeyToFile(t *testing.T) {
+	h, sim, tty, _ := unhardenedHost(t)
+	tm := openWizard(t, h, sim, tty)
+	key := filepath.Join(t.TempDir(), "alice.key")
+	tm.Type("alice")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown}) // Private key
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyRight})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}) // save to file
+	tm.Type(key)
+	waitFor(t, tm, "(●) save to file")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "Stop safely")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyLeft}) // to "Login works"
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "SUMMARY  admin alice")
+	ctrlCView(t, tm)
+
+	if b, _ := os.ReadFile(key); string(b) != secretKey {
+		t.Errorf("key file = %q", b)
+	}
+	if strings.Contains(tty.String(), "SECRETKEYMATERIAL") {
+		t.Error("key shown on the terminal too")
+	}
+	if al := actionLog(t, h); !strings.HasSuffix(al, "harden --user alice --key-out "+key+": ok\n") {
+		t.Errorf("action log:\n%s", al)
 	}
 }
 

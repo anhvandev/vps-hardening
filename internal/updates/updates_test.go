@@ -31,7 +31,7 @@ func TestAptList(t *testing.T) {
 		{"libnss-systemd", "255.4-1ubuntu8.17", "255.4-1ubuntu8.18", true},
 		{"perl-base", "5.36.0-7+deb12u3", "5.36.0-7+deb12u4", true},
 		{"curl", "8.5.0-2ubuntu10.5", "8.5.0-2ubuntu10.6", true}, // one of several origins is -security
-		{"libfoo2", "", "2.0-1", false},                           // a new dependency
+		{"libfoo2", "", "2.0-1", false},                          // a new dependency
 		{"tzdata", "2024a-3ubuntu1.1", "2025b-0ubuntu0.24.04", false},
 	}
 	if !slices.Equal(got, want) {

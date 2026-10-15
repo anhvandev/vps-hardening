@@ -158,6 +158,8 @@ func (j journalView) typing() bool { return false }
 
 func (j journalView) keys() string { return "↑↓ scroll · f follow · esc back" }
 
+func (j journalView) notice() string { return j.status }
+
 func (j journalView) layout() *lipgloss.Compositor {
 	state, follow := "not following", "Follow"
 	if j.follow != nil {
@@ -172,9 +174,6 @@ func (j journalView) layout() *lipgloss.Compositor {
 	}
 	blocks := []any{titleStyle.Render("Journal: "+j.unit) + "  " + dimStyle.Render(state), body,
 		buttonRow(button{"f", follow, ""}, button{"esc", "Back", ""})}
-	if j.status != "" {
-		blocks = append(blocks, j.status)
-	}
 	return stack(blocks...)
 }
 

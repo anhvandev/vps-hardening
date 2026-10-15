@@ -1,6 +1,6 @@
 package tui
 
-// Helpers shared by several screens: the logged mutation path, the
+// Helpers shared by several screens: the quiet-error rule, the
 // operator's SSH session, the firewall and the Listening Ports.
 
 import (
@@ -10,33 +10,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/firewall"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
 )
 
-// logMutation takes the global lock under root, runs do and appends one
-// action-log line. A busy lock returns its holder and runs nothing.
-func logMutation(root, action string, do func() error) error {
-	lk, err := actionlog.Lock(filepath.Join(root, actionlog.LockPath))
-	if err != nil {
-		return err
-	}
-	defer lk.Close()
-	err = do()
-	appendLog(root, action, err)
-	return err
-}
-
 // quiet marks an error whose text may carry secrets (e.g. a Cron Entry's
 // command): the action log gets a bare "failed", the screen the full text.
 type quiet struct{ error }
-
-// appendLog appends action's action-log line under root with logResult(err).
-func appendLog(root, action string, err error) {
-	actionlog.Append(filepath.Join(root, actionlog.LogPath), action, logResult(err)) // failures to log are ignored
-}
 
 // logResult is what the log records for err: ok, stopped (at the Verify
 // Gate, as the CLI logs it), or failed with err (bare if quiet).
@@ -50,14 +31,6 @@ func logResult(err error) string {
 		return "failed: " + err.Error()
 	}
 	return "ok"
-}
-
-// dropLast is s without its last rune: backspace in a text field.
-func dropLast(s string) string {
-	if r := []rune(s); len(r) > 0 {
-		return string(r[:len(r)-1])
-	}
-	return s
 }
 
 // sessionIP is the client IP of the operator's SSH session, "" when not

@@ -25,17 +25,30 @@ const (
 // form is a titled list of labelled text fields; tab/↑↓ move between them,
 // enter submits, esc cancels. The screen validates on submitted and sets err
 // to show the problem under the fields (cleared on the next edit).
-// Placeholders: f.inputs[i].Placeholder = "…".
+// Placeholders: f.inputs[i].Placeholder = "…"; f.hints[i] is shown dim after
+// field i. f.opts[i] makes field i a row of options (see options).
 type form struct {
 	title  string
 	labels []string
 	inputs []textinput.Model
+	opts   []options
+	hints  []string
 	focus  int
 	err    string
 }
 
+// options is a field's row of choices, ←/→ moving between them and space
+// picking one: [x] toggles, or (●) exactly one of them when radio. With text
+// the field's text input follows them and gets the typing; else it has none.
+type options struct {
+	names       []string
+	on          []bool
+	radio, text bool
+	cur         int // the option under the cursor
+}
+
 func newForm(title string, labels ...string) form {
-	f := form{title: title, labels: labels}
+	f := form{title: title, labels: labels, opts: make([]options, len(labels)), hints: make([]string, len(labels))}
 	for range labels {
 		f.inputs = append(f.inputs, newInput())
 	}
@@ -66,6 +79,25 @@ func (f form) update(msg tea.Msg) (form, formEvent) {
 			return f, editing
 		}
 		f.err = ""
+		if o := &f.opts[f.focus]; o.names != nil {
+			switch k.String() {
+			case "left":
+				o.cur = max(o.cur-1, 0)
+				return f, editing
+			case "right":
+				o.cur = min(o.cur+1, len(o.names)-1)
+				return f, editing
+			case "space":
+				if o.radio {
+					clear(o.on)
+				}
+				o.on[o.cur] = !o.on[o.cur] || o.radio
+				return f, editing
+			}
+			if !o.text {
+				return f, editing
+			}
+		}
 	}
 	f.inputs[f.focus], _ = f.inputs[f.focus].Update(msg)
 	return f, editing
@@ -76,9 +108,19 @@ func (f form) view() string {
 	for _, l := range f.labels {
 		lw = max(lw, ansi.StringWidth(l))
 	}
-	ls := []string{titleStyle.Render(f.title)}
+	var ls []string
+	if f.title != "" {
+		ls = append(ls, titleStyle.Render(f.title))
+	}
 	for i, l := range f.labels {
-		ls = append(ls, " "+fit(l+":", lw+1)+" "+f.inputs[i].View())
+		v := f.inputs[i].View()
+		if o := f.opts[i]; o.names != nil {
+			v = o.view(i == f.focus, v)
+		}
+		if f.hints[i] != "" {
+			v += "   " + dimStyle.Render(f.hints[i])
+		}
+		ls = append(ls, " "+fit(l+":", lw+1)+" "+v)
 	}
 	if f.err != "" {
 		ls = append(ls, " "+errStyle.Render(f.err))
@@ -86,7 +128,35 @@ func (f form) view() string {
 	return strings.Join(ls, "\n")
 }
 
+// view draws the options, the one under the cursor reversed while focused,
+// then in, the text field's view, when o has one.
+func (o options) view(focused bool, in string) string {
+	var vs []string
+	for i, n := range o.names {
+		box := "[ ] "
+		switch {
+		case o.radio && o.on[i]:
+			box = "(" + glyph("●") + ") "
+		case o.radio:
+			box = "( ) "
+		case o.on[i]:
+			box = "[x] "
+		}
+		if focused && i == o.cur {
+			n = selectedStyle.Render(n)
+		}
+		vs = append(vs, box+n)
+	}
+	if o.text {
+		vs = append(vs, in)
+	}
+	return strings.Join(vs, "  ")
+}
+
 func (f form) keys() string {
+	if f.opts[f.focus].names != nil {
+		return "←/→ choose · space pick · enter ok · tab next field · esc cancel"
+	}
 	if len(f.inputs) > 1 {
 		return "enter ok · tab next field · esc cancel"
 	}

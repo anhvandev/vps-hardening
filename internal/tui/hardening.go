@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
@@ -13,14 +15,17 @@ import (
 
 func init() { screens["Hardening"] = newHardening }
 
-// hardenField is one wizard input, mapped to its `vpsctl harden` flag: a
-// text value (blank = flag left out) or a toggle.
-type hardenField struct {
-	label, flag string
-	toggle      bool
-	value       string
-	on          bool
-}
+// The wizard's fields (design §2b), in the form's order.
+const (
+	fUser = iota
+	fPort
+	fKey   // show once (option 0) or save to file (option 1, the path typed)
+	fSteps // the optional steps, unchecked = skipped
+	fRotate
+)
+
+// skipFlags are the `vpsctl harden` flags of fSteps's options, unchecked.
+var skipFlags = []string{"--skip-firewall", "--skip-fail2ban", "--skip-updates", "--skip-sysctl"}
 
 // hardening is the Hardening screen. On a machine whose SSH is key-only it
 // is the Hardening Status (hardening_status.go); otherwise the wizard: the
@@ -36,22 +41,19 @@ type hardening struct {
 	hst    bool           // the Hardening Status shows, not the wizard
 	table  table
 	w, ht  int
-	fields []hardenField
-	cursor int
-	status string // an input error
+	form   form // the wizard
 }
 
 func newHardening(m *harden.Machine) tea.Model {
-	return hardening{m: m, table: newTable("STEP", "STATE", "", ""), fields: []hardenField{
-		{label: "Admin user", flag: "--user"},
-		{label: "SSH port (blank = keep current)", flag: "--port"},
-		{label: "Key file, mode 600 (blank = show on screen)", flag: "--key-out"},
-		{label: "Rotate key", flag: "--rotate-key", toggle: true},
-		{label: "Skip firewall", flag: "--skip-firewall", toggle: true},
-		{label: "Skip fail2ban", flag: "--skip-fail2ban", toggle: true},
-		{label: "Skip automatic updates", flag: "--skip-updates", toggle: true},
-		{label: "Skip sysctl", flag: "--skip-sysctl", toggle: true},
-	}}
+	f := newForm("", "Admin user", "SSH port", "Private key", "Steps", "Rotate key")
+	f.hints[fUser], f.hints[fPort] = "must not be root / ubuntu / system", "blank = keep current"
+	f.opts[fKey] = options{names: []string{"show once on screen", "save to file"}, on: []bool{true, false}, radio: true, text: true}
+	f.opts[fSteps] = options{names: []string{"Firewall", "fail2ban", "Auto updates", "sysctl"}, on: []bool{true, true, true, true}}
+	f.opts[fRotate] = options{names: []string{"replace the Admin User's keys"}, on: []bool{false}}
+	for i := range f.inputs {
+		f.inputs[i].SetWidth(20)
+	}
+	return hardening{m: m, table: newTable("STEP", "STATE", "", ""), form: f}
 }
 
 func (h hardening) Init() tea.Cmd {
@@ -77,33 +79,16 @@ func (h hardening) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if h.hst {
 		return h.statusUpdate(msg)
 	}
-	if k, ok := msg.(tea.KeyPressMsg); ok {
-		return h.key(k)
+	if click, ok := msg.(tea.MouseClickMsg); ok { // [ Start Hardening ]
+		msg = mouse(h.layout(), click)
 	}
-	return h, nil
-}
-
-// key edits the form: ↑/↓ move, text fields take typing, space flips a
-// toggle, enter validates and runs.
-func (h hardening) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	f := &h.fields[h.cursor]
-	switch k := msg.String(); {
-	case k == "esc":
+	f, ev := h.form.update(msg)
+	h.form = f
+	switch ev {
+	case cancelled:
 		return h, Back
-	case k == "up" || k == "shift+tab":
-		h.cursor = max(h.cursor-1, 0)
-	case k == "down" || k == "tab":
-		h.cursor = min(h.cursor+1, len(h.fields)-1)
-	case k == "enter":
+	case submitted:
 		return h.start()
-	case f.toggle:
-		if k == "space" {
-			f.on = !f.on
-		}
-	case k == "backspace":
-		f.value = dropLast(f.value)
-	default:
-		f.value += msg.Text
 	}
 	return h, nil
 }
@@ -112,19 +97,32 @@ func (h hardening) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // Hardening Task.
 func (h hardening) start() (tea.Model, tea.Cmd) {
 	var args []string
-	for _, f := range h.fields {
-		if v := strings.TrimSpace(f.value); v != "" {
-			args = append(args, f.flag, v)
-		} else if f.on {
-			args = append(args, f.flag)
+	for _, a := range [][]string{{"--user", h.form.value(fUser)}, {"--port", h.form.value(fPort)}} {
+		if v := strings.TrimSpace(a[1]); v != "" {
+			args = append(args, a[0], v)
+		}
+	}
+	if h.form.opts[fKey].on[1] {
+		v := strings.TrimSpace(h.form.value(fKey))
+		if v == "" {
+			h.form.err = "save to file: type the key file's path"
+			return h, nil
+		}
+		args = append(args, "--key-out", v)
+	}
+	if h.form.opts[fRotate].on[0] {
+		args = append(args, "--rotate-key")
+	}
+	for i, on := range h.form.opts[fSteps].on {
+		if !on {
+			args = append(args, skipFlags[i])
 		}
 	}
 	o, err := harden.ParseFlags(args)
 	if err != nil {
-		h.status = "ERROR: " + err.Error()
+		h.form.err = err.Error()
 		return h, nil
 	}
-	h.status = ""
 	port := o.Port // the port to log in on at the Verify Gate
 	if port == 0 {
 		port, _ = h.m.CurrentPort()
@@ -139,34 +137,20 @@ func (h hardening) start() (tea.Model, tea.Cmd) {
 	return h, runTask("Hardening", "harden "+strings.Join(args, " "), summary, steps...)
 }
 
+// layout is the Hardening Status, or the wizard: header with the badge, the
+// form and [ Start Hardening ].
+func (h hardening) layout() *lipgloss.Compositor {
+	if h.hst {
+		return h.statusLayout()
+	}
+	title, badge := titleStyle.Render("Hardening"), errStyle.Render(glyph("✗")+" NOT HARDENED")
+	head := title + strings.Repeat(" ", max(h.w-ansi.StringWidth(title)-ansi.StringWidth(badge), 1)) + badge
+	return stack(head, h.form.view(), "", buttonRow(button{"enter", "Start Hardening", ""}))
+}
+
 func (h hardening) View() tea.View {
-	switch {
-	case !h.loaded:
+	if !h.loaded {
 		return tea.NewView(titleStyle.Render("Hardening") + "\n\nloading…")
-	case h.hst:
-		return tea.NewView(h.layout().Render())
 	}
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("Hardening") + "\n\n")
-	for i, f := range h.fields {
-		cur := "  "
-		if i == h.cursor {
-			cur = "> "
-		}
-		v := f.value
-		if f.toggle {
-			v = "[ ]"
-			if f.on {
-				v = "[x]"
-			}
-		} else if i == h.cursor {
-			v += "█"
-		}
-		fmt.Fprintf(&b, "%s%-44s %s\n", cur, f.label, v)
-	}
-	b.WriteString("\n" + dimStyle.Render("↑/↓ move · space toggle · enter run (with the Verify Gate) · esc back"))
-	if h.status != "" {
-		b.WriteString("\n\n" + h.status)
-	}
-	return tea.NewView(b.String())
+	return tea.NewView(h.layout().Render())
 }

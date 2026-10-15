@@ -194,6 +194,8 @@ func (t Model) status() (left, right string) {
 		left = t.taskStatus()
 	case t.holder != "" && !t.running():
 		left = errStyle.Render("locked by " + t.holder)
+	case notice(t.screen) != "":
+		left = notice(t.screen)
 	case t.newer != "":
 		left = "vpsctl " + string(t.newer) + " available: run `sudo vpsctl self-update`"
 	}
@@ -218,6 +220,15 @@ func (t Model) status() (left, right string) {
 		}
 	}
 	return left, right
+}
+
+// notice is the open screen's note for the status bar (its optional
+// notice() string, e.g. "no changes to cron.service"), "" if none.
+func notice(s tea.Model) string {
+	if n, ok := s.(interface{ notice() string }); ok {
+		return n.notice()
+	}
+	return ""
 }
 
 // fit truncates or pads s to exactly w columns.
