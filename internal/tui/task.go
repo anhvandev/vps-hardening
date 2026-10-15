@@ -266,7 +266,7 @@ func mmss(d time.Duration) string {
 // spinner is the running mark, one frame per second.
 func (t Model) spinner() string {
 	frames := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-	if ascii {
+	if ascii.Load() {
 		frames = []rune(`|/-\`)
 	}
 	return string(frames[int(max(t.now.Sub(t.task.start), 0).Seconds())%len(frames)])
@@ -287,7 +287,7 @@ func (t Model) taskStatus() string {
 // panel is the Task panel, w columns wide and at most h lines high.
 func (t Model) panel(w, h int) []string {
 	k, bd := t.task, lipgloss.RoundedBorder()
-	if ascii {
+	if ascii.Load() {
 		bd = lipgloss.ASCIIBorder()
 	}
 	cw := w - 4 // content columns

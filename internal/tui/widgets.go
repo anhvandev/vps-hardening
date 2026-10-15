@@ -45,7 +45,7 @@ import (
 func detailBox(title, body string, w, lines int) string {
 	w = max(w, 8) // a screen not sized yet
 	bd := lipgloss.RoundedBorder()
-	if ascii {
+	if ascii.Load() {
 		bd = lipgloss.ASCIIBorder()
 	}
 	top := bd.TopLeft + bd.Top + " " + titleStyle.Render(title) + " "

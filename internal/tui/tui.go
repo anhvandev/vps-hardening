@@ -118,7 +118,7 @@ func (t Model) tick() tea.Cmd {
 // New opens the TUI on the Overview, with the menu focused; now is the
 // current time.
 func New(m *harden.Machine, now time.Time) Model {
-	ascii = asciiTerm()
+	ascii.Store(asciiTerm())
 	return Model{m: m, now: now, machine: machineLine(m), cursor: slices.Index(items(), "Overview"),
 		screen: screens["Overview"](m), hardened: m.SSH.StageBLive()}
 }

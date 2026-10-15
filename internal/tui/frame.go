@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -27,13 +28,13 @@ const (
 )
 
 // ascii is set (in New) when the terminal can't render the status symbols.
-var ascii bool
+var ascii atomic.Bool
 
 var asciiGlyph = map[string]string{"●": "*", "✓": "v", "✗": "x", "⚠": "!", "▶": ">", "◆": "#", "▌": ">", "·": "."}
 
 // glyph is s, or its ASCII stand-in on a terminal that can't render it.
 func glyph(s string) string {
-	if ascii {
+	if ascii.Load() {
 		return asciiGlyph[s]
 	}
 	return s
@@ -54,7 +55,7 @@ func asciiTerm() bool {
 }
 
 func border() lipgloss.Border {
-	if ascii {
+	if ascii.Load() {
 		return lipgloss.ASCIIBorder()
 	}
 	return lipgloss.NormalBorder()

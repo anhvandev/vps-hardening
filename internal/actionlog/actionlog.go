@@ -38,7 +38,13 @@ func Lock(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	// A few short retries ride out Holder's instant probe; a real holder keeps it far longer.
+	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	for i := 0; err != nil && i < 5; i++ {
+		time.Sleep(10 * time.Millisecond)
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	}
+	if err != nil {
 		holder, _ := io.ReadAll(f)
 		f.Close()
 		return nil, fmt.Errorf("locked by %s", strings.TrimSpace(string(holder)))
@@ -50,7 +56,7 @@ func Lock(path string) (*os.File, error) {
 
 // Holder is who holds the global mutation lock at path ("<user> (pid N)"),
 // "" when it is free. It never creates the lock file.
-// ponytail: the probe holds a shared lock for an instant, so a Lock racing it is refused once.
+// The probe holds a shared lock for an instant; Lock retries briefly to ride it out.
 func Holder(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
