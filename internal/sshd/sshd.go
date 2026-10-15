@@ -71,6 +71,16 @@ func (m *Manager) StageBLive() bool {
 	return regexp.MustCompile(`(?m)^PasswordAuthentication no$`).Match(b)
 }
 
+// KeyOnly is nil when the effective config (sshd -T) is key-only with root
+// login off, else why not.
+func (m *Manager) KeyOnly() error {
+	out, err := m.Effective()
+	if err != nil {
+		return err
+	}
+	return hardened(out)
+}
+
 // ensureInclude prepends the Include line: drop-ins only count when included.
 func (m *Manager) ensureInclude() error {
 	p := m.path(MainConfig)

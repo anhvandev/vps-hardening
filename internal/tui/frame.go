@@ -90,10 +90,14 @@ func machineLine(m *harden.Machine) string {
 
 // badge is the Hardening badge at the right of the header.
 func (t Model) badge() string {
-	if t.hardened {
-		return okStyle.Render(glyph("●") + " Hardened")
+	n := fmt.Sprintf(" Hardening %d/%d", t.done, t.chosen)
+	switch {
+	case !t.hardened:
+		return errStyle.Render(glyph("✗") + " NOT HARDENED")
+	case t.done < t.chosen:
+		return warnStyle.Render(glyph("⚠") + n)
 	}
-	return errStyle.Render(glyph("✗") + " NOT HARDENED")
+	return okStyle.Render(glyph("●") + n)
 }
 
 // sideRow is one sidebar line: a group heading or a menu item.

@@ -100,6 +100,10 @@ type Model struct {
 	task     *task         // the running Task, or the ended one until its card is closed
 	refused  string        // why the last Task did not start; cleared once the lock is free
 	holder   string        // who holds the global lock, "" if free (read every tick)
+
+	// Hardening badge (readHardening): hardened is SSH key-only; done of
+	// chosen counts the Hardening Steps Done of those not Skipped.
+	done, chosen int
 }
 
 // tickMsg is the shell's clock: every second it moves now and re-reads the
@@ -119,8 +123,10 @@ func (t Model) tick() tea.Cmd {
 // current time.
 func New(m *harden.Machine, now time.Time) Model {
 	ascii.Store(asciiTerm())
-	return Model{m: m, now: now, machine: machineLine(m), cursor: slices.Index(items(), "Overview"),
-		screen: screens["Overview"](m), hardened: m.SSH.StageBLive()}
+	t := Model{m: m, now: now, machine: machineLine(m), cursor: slices.Index(items(), "Overview"),
+		screen: screens["Overview"](m)}
+	t.readHardening()
+	return t
 }
 
 func (t Model) Init() tea.Cmd { return tea.Batch(t.screen.Init(), t.tick()) }
@@ -139,7 +145,7 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return t.taskUpdate(msg)
 	case backMsg:
 		t.focused = false
-		t.hardened = t.m.SSH.StageBLive()
+		t.readHardening()
 		return t, nil
 	case NewVersionMsg:
 		t.newer = msg
@@ -183,7 +189,8 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return t, tea.Batch(tea.Exec(msg.term, nil), msg.wait)
 		}
 		if msg.ask == nil { // a job finished: it may have hardened the host
-			t.hardened, t.busyNote = t.m.SSH.StageBLive(), false
+			t.busyNote = false
+			t.readHardening()
 		}
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
@@ -281,7 +288,7 @@ func (t Model) open(title string) (tea.Model, tea.Cmd) {
 	}
 	t.cursor = slices.Index(items(), title)
 	t.screen, t.focused, t.overlay, t.help = newScreen(t.m), true, false, false
-	t.hardened = t.m.SSH.StageBLive()
+	t.readHardening()
 	t.screen, _ = t.screen.Update(t.contentSize())
 	return t, t.screen.Init()
 }

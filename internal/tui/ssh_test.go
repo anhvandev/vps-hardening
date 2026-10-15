@@ -54,7 +54,7 @@ func TestSSHScreenFlagsMatchOverrideAndOwnSession(t *testing.T) {
 }
 
 // sshSim models what an SSH port change touches, on top of h.fake: sshd -T
-// reads the port from vpsctl's drop-in, a restart moves the listener there,
+// reads the port and auth from vpsctl's drop-in, a restart moves the listener there,
 // ss reports it, and ufw keeps its rule list.
 type sshSim struct {
 	*system.Fake
@@ -70,8 +70,9 @@ func (s *sshSim) Run(name string, args ...string) (system.Result, error) {
 	fmt.Sscanf(strings.SplitN(string(b), "\n", 3)[1], "Port %d", &port)
 	switch {
 	case strings.HasPrefix(line, "sshd -T"):
-		return system.Result{Stdout: fmt.Sprintf("port %d\npasswordauthentication no\nkbdinteractiveauthentication no\n"+
-			"pubkeyauthentication yes\npermitrootlogin no\n", port)}, nil
+		auth := map[bool]string{true: "no", false: "yes"}[strings.Contains(string(b), "PasswordAuthentication no")]
+		return system.Result{Stdout: fmt.Sprintf("port %d\npasswordauthentication %s\nkbdinteractiveauthentication no\n"+
+			"pubkeyauthentication yes\npermitrootlogin %s\n", port, auth, auth)}, nil
 	case line == "sshd -t":
 	case line == "systemctl restart ssh":
 		s.listening = port

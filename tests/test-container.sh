@@ -137,6 +137,8 @@ for entry in "${MATRIX[@]}"; do
   esac
   x 'sysctl -n net.ipv4.tcp_syncookies 2>/dev/null | grep -q 1' \
     && ok "tcp_syncookies=1" || log "  note: tcp_syncookies not applied (container /proc limit)"
+  check "Hardening Record names testop" x 'grep -q "\"admin_user\": \"testop\"" /var/lib/vpsctl/hardening.json'
+  check "Hardening Record holds no key" x '! grep -q "PRIVATE KEY" /var/lib/vpsctl/hardening.json'
 
   # --- Idempotency -----------------------------------------------------------
   harden run2 --user testop --yes --key-out /root/k $portarg
