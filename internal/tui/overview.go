@@ -39,6 +39,7 @@ func (o overview) Init() tea.Cmd {
 		rows := firewallRows(o.m)
 		rows = append(rows,
 			row{"fail2ban", fail2banState(o.m.R)},
+			row{"Docker", dockerState(o.m.R)},
 			row{"Updates", updateState(o.m)},
 			row{"Disk /", diskState(o.m.R)},
 			row{"RAM", ramState(o.m.Root)},
@@ -60,7 +61,7 @@ func (o overview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.String() == "esc":
 			return o, Back
 		case msg.String() == "s" && o.swap:
-			return o, func() tea.Msg { return openMsg("Swap") }
+			return o, func() tea.Msg { return openMsg{title: "Swap"} }
 		}
 	}
 	return o, nil
