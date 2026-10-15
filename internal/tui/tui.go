@@ -75,6 +75,13 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NewVersionMsg:
 		t.newer = msg
 		return t, nil
+	case gateMsg:
+		if msg.term != nil { // a job takes the real terminal (raw key display)
+			return t, tea.Batch(tea.Exec(msg.term, nil), msg.wait)
+		}
+		if msg.ask == nil { // a job finished: it may have hardened the host
+			t.hardened = t.m.SSH.StageBLive()
+		}
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
 			return t, tea.Quit
