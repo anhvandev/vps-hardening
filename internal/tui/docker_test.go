@@ -109,7 +109,7 @@ func TestDockerMenuItemOnlyWithDocker(t *testing.T) {
 	tm := start(debianHost(t))
 	waitFor(t, tm, "RAM")
 	v := quitView(t, tm)
-	wantAll(t, v, "Docker     not installed")
+	wantAll(t, v, "Docker      not installed")
 	if strings.Contains(v, "│   Docker ") {
 		t.Errorf("Docker in the menu without Docker:\n%s", v)
 	}
@@ -117,7 +117,7 @@ func TestDockerMenuItemOnlyWithDocker(t *testing.T) {
 	tm = start(dockerHost(t))
 	waitFor(t, tm, "RAM")
 	v = quitView(t, tm)
-	wantAll(t, v, "│   Docker ", "Docker     3 containers · ⚠ 1 Published Port bypassing the firewall")
+	wantAll(t, v, "│   Docker ", "Docker      ⚠ 1 Published Port")
 }
 
 // openDocker starts the TUI on h and focuses the loaded Docker screen.
@@ -163,11 +163,8 @@ func (r *newContainer) Run(name string, args ...string) (system.Result, error) {
 	return r.Fake.Run(name, args...)
 }
 
-// While open, the screen re-reads the containers on its own.
+// While open, the screen re-reads the containers on each refresh tick.
 func TestDockerAutoRefreshes(t *testing.T) {
-	old := autoRefresh
-	autoRefresh = 20 * time.Millisecond
-	t.Cleanup(func() { autoRefresh = old })
 	h := dockerHost(t)
 	r := &newContainer{Fake: h.fake}
 	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
@@ -176,6 +173,7 @@ func TestDockerAutoRefreshes(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "old-api")
 	r.started.Store(true)
+	tm.Send(refreshMsg{})
 	waitFor(t, tm, "cache-1")
 	ctrlCView(t, tm)
 }

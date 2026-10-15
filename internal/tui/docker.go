@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -28,11 +27,10 @@ var noDocker atomic.Bool
 // (plain containers last), with their Published Ports; ports bound to all
 // interfaces are flagged ⚠ with how to fix them. s/x/R start, stop and
 // restart the selected container as a Task after a confirm; l follows its
-// logs. Re-read every autoRefresh while open. vpsctl never edits Docker's
+// logs. Re-read on every refresh tick while open. vpsctl never edits Docker's
 // firewall rules.
 type dockerScreen struct {
 	m      *harden.Machine
-	id     *byte // this screen's refresh chain (a reopened screen starts another)
 	loaded bool
 	list   []docker.Container
 	err    error // docker not reachable
@@ -48,29 +46,22 @@ type dockerScreen struct {
 // dockerVerbs maps a key to its docker verb and what to say once done.
 var dockerVerbs = map[string][2]string{"s": {"start", "started"}, "x": {"stop", "stopped"}, "R": {"restart", "restarted"}}
 
-// dockerMsg is a read of the containers; chain is the screen whose refresh
-// chain asked for it (nil for a one-off reload).
+// dockerMsg is a read of the containers.
 type dockerMsg struct {
-	list  []docker.Container
-	err   error
-	chain *byte
+	list []docker.Container
+	err  error
 }
-
-// dockerTickMsg is time for chain's next refresh.
-type dockerTickMsg struct{ chain *byte }
 
 // openMsg asks the shell to open the screen title on its item.
 type openMsg struct{ title, item string }
 
 func newDocker(m *harden.Machine) tea.Model {
-	return dockerScreen{m: m, id: new(byte), table: newTable("CONTAINER", "PROJECT", "STATE", "PORTS", "IMAGE")}
+	return dockerScreen{m: m, table: newTable("CONTAINER", "PROJECT", "STATE", "PORTS", "IMAGE")}
 }
 
-// Init reads the containers and starts the refresh chain: each read of the
-// chain arms the next tick, so reads never overlap.
-func (d dockerScreen) Init() tea.Cmd { return d.load(d.id) }
+func (d dockerScreen) Init() tea.Cmd { return d.load() }
 
-func (d dockerScreen) load(chain *byte) tea.Cmd {
+func (d dockerScreen) load() tea.Cmd {
 	return func() tea.Msg {
 		list, err := docker.Containers(d.m.R)
 		slices.SortStableFunc(list, func(a, b docker.Container) int {
@@ -82,7 +73,7 @@ func (d dockerScreen) load(chain *byte) tea.Cmd {
 			}
 			return cmp.Or(cmp.Compare(a.Project, b.Project), cmp.Compare(a.Name, b.Name))
 		})
-		return dockerMsg{list, err, chain}
+		return dockerMsg{list, err}
 	}
 }
 
@@ -102,17 +93,9 @@ func (d dockerScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			d.table.cursor, d.want = i, ""
 		}
 		d.table.setRows(d.rows())
-		if msg.chain != d.id {
-			return d, nil
-		}
-		return d, tea.Tick(autoRefresh, func(time.Time) tea.Msg { return dockerTickMsg{d.id} })
-	case dockerTickMsg:
-		if msg.chain != d.id {
-			return d, nil
-		}
-		return d, d.load(d.id)
-	case taskDoneMsg:
-		return d, d.load(nil)
+		return d, nil
+	case refreshMsg, taskDoneMsg:
+		return d, d.load()
 	case tea.MouseClickMsg:
 		if m := mouse(d.layout(), msg); m != nil {
 			return d.Update(m)
@@ -139,7 +122,7 @@ func (d dockerScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "esc":
 		return d, Back
 	case "r":
-		return d, d.load(nil)
+		return d, d.load()
 	case "l":
 		return openDockerLogs(d, d.list[d.table.selected()].Name)
 	}
@@ -322,9 +305,8 @@ func dockerState(r system.Runner) string {
 	case err != nil:
 		return "not reachable: " + err.Error()
 	}
-	s := fmt.Sprintf("%d containers", len(cs))
 	if n := len(openPorts(cs)); n > 0 {
-		s += " · " + warnStyle.Render(glyph("⚠")) + " " + publishedPorts(n) + " bypassing the firewall"
+		return warnText(publishedPorts(n))
 	}
-	return s
+	return okText(fmt.Sprintf("%d containers", len(cs)))
 }

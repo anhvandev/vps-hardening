@@ -46,7 +46,7 @@ func hardenedHost(t *testing.T) *testHost {
 // openHardening opens the Hardening screen and waits for what.
 func openHardening(t *testing.T, h *testHost, what string) string {
 	tm := startSized(h, 120, 40)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	tm.Type(menuTo("Hardening"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, what)
@@ -115,7 +115,7 @@ func TestBadgeGreenWithOnlySkippedSteps(t *testing.T) {
 	h.write("/proc/sys/kernel/kptr_restrict", "0\n")
 	h.write("/var/lib/vpsctl/hardening.json", `{"ran":"2026-10-15T01:12:00Z","by":"root","admin_user":"anh","skipped":["sysctl"]}`)
 	tm := startSized(h, 120, 40)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	wantAll(t, quitView(t, tm), "● Hardening 8/8")
 }
 
