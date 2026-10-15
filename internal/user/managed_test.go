@@ -1,6 +1,7 @@
 package user
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -107,5 +108,64 @@ func TestAddKeyRefusesNonPublicKeys(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(h.root, "home/bob/.ssh/authorized_keys")); err == nil {
 			t.Fatalf("%q installed", bad)
 		}
+	}
+}
+
+// A generated pair is shown once (here written to a 600 file) and its public
+// half added beside the keys already there.
+func TestGenerateKeyEmitsThenAddsPublicHalf(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("bob", os.Getuid())
+	m := newManager(h, "debian")
+	ak := filepath.Join(h.root, "home/bob/.ssh/authorized_keys")
+	os.MkdirAll(filepath.Dir(ak), 0o700)
+	os.WriteFile(ak, []byte(deskKey+"\n"), 0o600)
+	keyOut := filepath.Join(t.TempDir(), "bob.key")
+
+	if err := m.GenerateKey("bob", keyOut); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(keyOut); string(b) != "PRIVATE KEY\n" {
+		t.Fatalf("key file = %q", b)
+	}
+	if fi, _ := os.Stat(keyOut); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("key file mode %v", fi.Mode().Perm())
+	}
+	if b, _ := os.ReadFile(ak); string(b) != deskKey+"\nssh-ed25519 AAAA vpsctl\n" {
+		t.Fatalf("authorized_keys = %q", b)
+	}
+	assertEmptyDir(t, m.TmpDir)
+}
+
+// Generated key material is removed on every path; a key nobody received
+// (emit failed or never confirmed saved) is not installed.
+func TestGenerateKeyCleansUpOnEveryFailure(t *testing.T) {
+	cases := map[string]func(h *fakeHost, m *Manager){
+		"ssh-keygen fails": func(h *fakeHost, m *Manager) { h.fail["ssh-keygen"] = true },
+		"restorecon fails": func(h *fakeHost, m *Manager) { m.Host.SELinux = true; h.fail["restorecon"] = true },
+		"tty write fails": func(h *fakeHost, m *Manager) {
+			m.OpenTTY = func() (io.ReadWriteCloser, error) { return failWriter{}, nil }
+		},
+		"never saved": func(h *fakeHost, m *Manager) {
+			m.OpenTTY = func() (io.ReadWriteCloser, error) { return fakeTTY{strings.NewReader("nope\n"), io.Discard}, nil }
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newFakeHost(t)
+			h.addUser("bob", os.Getuid())
+			m := newManager(h, "debian")
+			m.OpenTTY = func() (io.ReadWriteCloser, error) { return fakeTTY{strings.NewReader("saved\n"), io.Discard}, nil }
+			setup(h, m)
+			if err := m.GenerateKey("bob", ""); err == nil {
+				t.Fatal("expected error")
+			}
+			assertEmptyDir(t, m.TmpDir)
+			if name != "restorecon fails" {
+				if _, err := os.Stat(filepath.Join(h.root, "home/bob/.ssh/authorized_keys")); err == nil {
+					t.Fatal("key installed")
+				}
+			}
+		})
 	}
 }
