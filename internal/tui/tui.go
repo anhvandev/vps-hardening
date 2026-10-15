@@ -10,7 +10,9 @@
 // are shown as "coming soon". A screen is a plain tea.Model, built fresh each
 // time it is opened (so it reads the live system then). While open it gets
 // every message, including every key except ctrl+c, and returns the Back
-// command to hand focus back to the menu.
+// command to hand focus back to the menu. Every change to the host goes
+// through logMutation (global lock + one action-log line); Lockout Guard checks
+// (internal/guard) run inside it, on facts read under the lock.
 package tui
 
 import (

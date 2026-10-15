@@ -79,7 +79,7 @@ func (fw *firewalld) List() ([]Rule, error) {
 }
 
 func (fw *firewalld) Allow(r Rule) error {
-	if err := r.validate(); err != nil {
+	if err := r.Validate(); err != nil {
 		return err
 	}
 	if r.Proto == "" {
