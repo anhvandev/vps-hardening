@@ -29,6 +29,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
+	"github.com/anhvandev/vpsctl/internal/docker"
 	"github.com/anhvandev/vpsctl/internal/harden"
 )
 
@@ -48,12 +49,19 @@ func items() []string {
 	var ts []string
 	for _, g := range menu {
 		for _, title := range g.titles {
-			if _, ok := screens[title]; ok {
+			if shown(title) {
 				ts = append(ts, title)
 			}
 		}
 	}
 	return ts
+}
+
+// shown reports whether title is in the menu: it has a screen, and Docker
+// is installed for the Docker one.
+func shown(title string) bool {
+	_, ok := screens[title]
+	return ok && !(title == "Docker" && noDocker.Load())
 }
 
 // screens maps a menu title to the constructor of its screen.
@@ -119,6 +127,7 @@ func (t Model) tick() tea.Cmd {
 // current time.
 func New(m *harden.Machine, now time.Time) Model {
 	ascii.Store(asciiTerm())
+	noDocker.Store(!docker.Installed(m.R))
 	return Model{m: m, now: now, machine: machineLine(m), cursor: slices.Index(items(), "Overview"),
 		screen: screens["Overview"](m), hardened: m.SSH.StageBLive()}
 }
@@ -144,6 +153,11 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NewVersionMsg:
 		t.newer = msg
 		return t, nil
+	case openMsg: // a screen links to an item on another screen
+		m, cmd := t.open(msg.title)
+		t = m.(Model)
+		t.screen, _ = t.screen.Update(msg)
+		return t, cmd
 	case tea.WindowSizeMsg:
 		t.w, t.h = msg.Width, msg.Height
 		var cmd tea.Cmd
@@ -275,12 +289,11 @@ func (t Model) menuKey(key string) (tea.Model, tea.Cmd) {
 
 // open builds a fresh screen for title and focuses it; unbuilt titles do nothing.
 func (t Model) open(title string) (tea.Model, tea.Cmd) {
-	newScreen, ok := screens[title]
-	if !ok {
+	if !shown(title) {
 		return t, nil
 	}
 	t.cursor = slices.Index(items(), title)
-	t.screen, t.focused, t.overlay, t.help = newScreen(t.m), true, false, false
+	t.screen, t.focused, t.overlay, t.help = screens[title](t.m), true, false, false
 	t.hardened = t.m.SSH.StageBLive()
 	t.screen, _ = t.screen.Update(t.contentSize())
 	return t, t.screen.Init()

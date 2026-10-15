@@ -36,6 +36,7 @@ func (o overview) Init() tea.Cmd {
 		rows := firewallRows(o.m)
 		rows = append(rows,
 			row{"fail2ban", fail2banState(o.m.R)},
+			row{"Docker", dockerState(o.m.R)},
 			row{"Updates", updateState(o.m)},
 			row{"Disk /", diskState(o.m.R)},
 			row{"RAM", ramState(o.m.Root)})
