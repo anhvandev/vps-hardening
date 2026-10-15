@@ -125,7 +125,7 @@ func (s sshScreen) promptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // for user in between, unless the Lockout Guard refuses on facts read under
 // the lock.
 func (s sshScreen) changePort(port int, user string) tea.Cmd {
-	return runGated(s.m.Root, fmt.Sprintf("ssh port %d", port), func(ask func(string) (bool, error)) error {
+	return runGated(s.m.Root, fmt.Sprintf("ssh port %d", port), func(ask func(string) (bool, error), _ func() func()) error {
 		cur, err := s.m.CurrentPort()
 		if err != nil {
 			return err

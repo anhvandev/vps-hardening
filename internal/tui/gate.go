@@ -2,27 +2,37 @@ package tui
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
+	"github.com/anhvandev/vpsctl/internal/harden"
 )
 
 // gateMsg is what a runGated job reports: with ask set it waits at the Verify
-// Gate for the operator's answer on ask; otherwise it finished with err.
+// Gate for the operator's answer on ask; with term set it wants the real
+// terminal (the shell handles that); otherwise it finished with err.
 type gateMsg struct {
 	ask  chan<- bool
+	term *termLease
 	err  error
 	next <-chan gateMsg
 }
+
+// wait is the command that waits for the job's next gateMsg.
+func (g gateMsg) wait() tea.Msg { return <-g.next }
 
 // runGated runs job in the background through logMutation (the global lock
 // is held for the whole job, across the Verify Gate), logging a "started"
 // line first. job's ask (harden.ChangeSSH's, harden.Run's) turns into a
 // gateMsg the screen hands to newVerifyGate; job's result is the last gateMsg.
+// job's release leaves the alternate screen and blocks until the TUI has; the
+// func it returns gives the terminal back (see rawKeyMachine).
 // While it runs, the screen must keep focus (ignore esc) to receive them.
-func runGated(root, action string, job func(ask func(string) (bool, error)) error) tea.Cmd {
+func runGated(root, action string, job func(ask func(string) (bool, error), release func() (back func())) error) tea.Cmd {
 	return func() tea.Msg {
 		ch := make(chan gateMsg)
 		go func() {
@@ -32,12 +42,66 @@ func runGated(root, action string, job func(ask func(string) (bool, error)) erro
 					reply := make(chan bool)
 					ch <- gateMsg{ask: reply, next: ch}
 					return <-reply, nil
+				}, func() func() {
+					l := &termLease{released: make(chan struct{}), done: make(chan struct{})}
+					ch <- gateMsg{term: l, next: ch}
+					<-l.released
+					return func() { close(l.done) }
 				})
 			})
 			ch <- gateMsg{err: err, next: ch}
 		}()
 		return <-ch
 	}
+}
+
+// termLease is a tea.ExecCommand that holds the TUI off the terminal (out of
+// the alternate screen) until the job gives it back.
+// ponytail: if bubbletea can't release the terminal, Run never runs and the job waits forever.
+type termLease struct{ released, done chan struct{} }
+
+func (l *termLease) Run() error {
+	close(l.released)
+	<-l.done
+	return nil
+}
+func (*termLease) SetStdin(io.Reader)  {}
+func (*termLease) SetStdout(io.Writer) {}
+func (*termLease) SetStderr(io.Writer) {}
+
+// rawKeyMachine is m with private keys shown raw on the real terminal: when
+// the key code (user.Manager's OpenTTY) opens it, the TUI leaves the
+// alternate screen; after the key is printed and `saved` typed, closing it
+// returns to the TUI. Run key-emitting work (harden.Run, InstallKey) on it
+// inside a runGated job, passing the job's release.
+func rawKeyMachine(m *harden.Machine, release func() (back func())) *harden.Machine {
+	u := *m.Manager
+	open := u.OpenTTY
+	if open == nil {
+		open = func() (io.ReadWriteCloser, error) { return os.OpenFile("/dev/tty", os.O_RDWR, 0) }
+	}
+	u.OpenTTY = func() (io.ReadWriteCloser, error) {
+		back := release()
+		tty, err := open()
+		if err != nil {
+			back()
+			return nil, err
+		}
+		return leasedTTY{tty, back}, nil
+	}
+	mm := *m
+	mm.Manager = &u
+	return &mm
+}
+
+type leasedTTY struct {
+	io.ReadWriteCloser
+	back func()
+}
+
+func (t leasedTTY) Close() error {
+	defer t.back()
+	return t.ReadWriteCloser.Close()
 }
 
 // verifyGate is the Verify Gate dialog: the exact ssh command to try from a
