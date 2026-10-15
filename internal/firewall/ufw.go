@@ -83,7 +83,7 @@ func (u *ufw) List() ([]Rule, error) {
 }
 
 func (u *ufw) Allow(r Rule) error {
-	if err := r.validate(); err != nil {
+	if err := r.Validate(); err != nil {
 		return err
 	}
 	_, err := run(u.r, "ufw", ufwArgs(r)...)

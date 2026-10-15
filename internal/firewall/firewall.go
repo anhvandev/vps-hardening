@@ -33,8 +33,8 @@ type Backend interface {
 	Remove(Rule) error
 }
 
-// validate guards input from the operator (TUI/CLI) before it reaches the host.
-func (r Rule) validate() error {
+// Validate guards input from the operator (TUI/CLI) before it reaches the host.
+func (r Rule) Validate() error {
 	end := r.End
 	if end == 0 {
 		end = r.Port
@@ -61,6 +61,21 @@ func (r Rule) ports(sep string) string {
 		return strconv.Itoa(r.Port)
 	}
 	return fmt.Sprintf("%d%s%d", r.Port, sep, r.End)
+}
+
+// String is how the operator reads r: "6000-6100/udp from 10.0.0.0/8".
+func (r Rule) String() string {
+	s := r.ports("-")
+	if r.Proto != "" {
+		s += "/" + r.Proto
+	}
+	if r.From != "" {
+		s += " from " + r.From
+	}
+	if r.Limit {
+		s += " (rate-limited)"
+	}
+	return s
 }
 
 // parsePorts is the inverse of Rule.ports.

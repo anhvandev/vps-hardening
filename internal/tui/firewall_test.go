@@ -2,13 +2,17 @@ package tui
 
 import (
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 
+	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
 )
@@ -117,4 +121,59 @@ func TestFirewallScreenFlow(t *testing.T) {
 	waitFor(t, tm, "q quit")
 	v := quitView(t, tm)
 	wantAll(t, v, "ufw active", "10.0.0.0/8")
+}
+
+// openFirewall starts the TUI on h and focuses the loaded Firewall screen.
+func openFirewall(t *testing.T, h *testHost) *teatest.TestModel {
+	t.Helper()
+	h.fake.Results["ss -Hltun"] = ssOut
+	h.fake.Results["sshd -T"] = system.Result{Stdout: "port 22\n"}
+	h.write("/etc/ssh/ssh_host_ed25519_key", "k")
+	tm := start(h)
+	waitFor(t, tm, "RAM")
+	tm.Type("jj")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "Listening")
+	return tm
+}
+
+// closeFirewall leaves the Firewall screen and quits, returning the last frame.
+func closeFirewall(t *testing.T, tm *teatest.TestModel) string {
+	t.Helper()
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	return quitView(t, tm)
+}
+
+// actionLog is the action log written under h's root ("" if none).
+func actionLog(h *testHost) string {
+	b, _ := os.ReadFile(filepath.Join(h.root, actionlog.LogPath))
+	return string(b)
+}
+
+// mutations is every firewall-changing command h ran.
+func mutations(h *testHost) []string {
+	var cmds []string
+	for _, c := range h.fake.Calls {
+		if strings.HasPrefix(c, "ufw allow") || strings.HasPrefix(c, "ufw delete") {
+			cmds = append(cmds, c)
+		}
+	}
+	return cmds
+}
+
+func TestFirewallOpenPort(t *testing.T) {
+	h := debianHost(t)
+	h.fake.Results["ufw allow from 10.0.0.0/8 to any port 6000:6100 proto udp"] = system.Result{}
+	tm := openFirewall(t, h)
+	tm.Type("a6000-6100/udp from 10.0.0.0/8")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "opened 6000-6100/udp from 10.0.0.0/8")
+	closeFirewall(t, tm)
+	if got := mutations(h); !slices.Equal(got, []string{"ufw allow from 10.0.0.0/8 to any port 6000:6100 proto udp"}) {
+		t.Errorf("ran %q", got)
+	}
+	if log := actionLog(h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall open 6000-6100/udp from 10.0.0.0/8: ok") {
+		t.Errorf("action log:\n%s", log)
+	}
 }
