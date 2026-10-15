@@ -35,29 +35,63 @@ func (m *Manager) InstallKey(name, keyOut string, rotate, waitSaved bool) error 
 		}
 	}
 
+	pub, err := m.emitNewKey(name, keyOut, waitSaved)
+	if err != nil {
+		return err
+	}
+	if err := m.writeAuthorizedKeys(pw, pub); err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(marker, nil, 0o600)
+}
+
+// GenerateKey generates an ed25519 pair for name, shows the private half once
+// (to keyOut with mode 600, or on the controlling TTY until the operator types
+// `saved`) and adds the public half to name's authorized_keys.
+func (m *Manager) GenerateKey(name, keyOut string) error {
+	if _, exists, err := m.Lookup(name); err != nil {
+		return err
+	} else if !exists {
+		return fmt.Errorf("user %q does not exist", name)
+	}
+	pub, err := m.emitNewKey(name, keyOut, true)
+	if err != nil {
+		return err
+	}
+	return m.appendKey(name, strings.TrimSpace(string(pub)))
+}
+
+// emitNewKey generates an ed25519 pair in a private temp dir (removed on
+// every path), emits the private half (see InstallKey) and returns the public
+// half.
+func (m *Manager) emitNewKey(name, keyOut string, waitSaved bool) ([]byte, error) {
 	// Open the destination first: no TTY → fail before anything is generated.
 	out, err := m.openKeyOut(keyOut)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer out.Close()
 
 	tmp, err := os.MkdirTemp(m.TmpDir, "vpsctl-key-") // mode 700
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer os.RemoveAll(tmp)
 	key := filepath.Join(tmp, "key")
 	if err := m.run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "vpsctl-"+name, "-f", key); err != nil {
-		return err
+		return nil, err
 	}
 	priv, err := os.ReadFile(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	pub, err := os.ReadFile(key + ".pub")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Emit before installing: a key nobody received must never become the only way in.
@@ -65,14 +99,20 @@ func (m *Manager) InstallKey(name, keyOut string, rotate, waitSaved bool) error 
 		priv = fmt.Appendf(nil, "\n==== PRIVATE KEY for %s (shown ONCE, save it now) ====\n%s==== END ====\n", name, priv)
 	}
 	if _, err := out.Write(priv); err != nil {
-		return fmt.Errorf("emit private key: %w", err)
+		return nil, fmt.Errorf("emit private key: %w", err)
 	}
 	if keyOut == "" && waitSaved {
 		if err := waitForSaved(out); err != nil {
-			return err
+			return nil, err
 		}
 	}
+	return pub, nil
+}
 
+// writeAuthorizedKeys replaces pw's authorized_keys with keys: .ssh 700 and
+// the file 600, both owned by the user, SELinux context restored.
+func (m *Manager) writeAuthorizedKeys(pw PasswdEntry, keys []byte) error {
+	sshDir := filepath.Join(m.Root, pw.Home, ".ssh")
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		return err
 	}
@@ -82,22 +122,16 @@ func (m *Manager) InstallKey(name, keyOut string, rotate, waitSaved bool) error 
 	if err := os.Chown(sshDir, pw.UID, pw.GID); err != nil {
 		return err
 	}
-	if err := writeAtomic(filepath.Join(sshDir, "authorized_keys"), pub, 0o600, func(tmp string) error {
+	if err := writeAtomic(filepath.Join(sshDir, "authorized_keys"), keys, 0o600, func(tmp string) error {
 		return os.Chown(tmp, pw.UID, pw.GID)
 	}); err != nil {
 		return err
 	}
 	// SELinux: a wrong context on .ssh silently breaks key auth.
 	if m.Host.SELinux {
-		if err := m.run("restorecon", "-R", sshDir); err != nil {
-			return err
-		}
+		return m.run("restorecon", "-R", sshDir)
 	}
-
-	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(marker, nil, 0o600)
+	return nil
 }
 
 // waitForSaved re-prompts on tty until the operator types `saved`; EOF or a
