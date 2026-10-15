@@ -62,7 +62,7 @@ func openServices(t *testing.T, h *testHost) *teatest.TestModel {
 	t.Helper()
 	tm := start(h)
 	waitFor(t, tm, "RAM")
-	tm.Type("jjjjj")
+	tm.Type(menuTo("Services"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "cron.service")
 	return tm

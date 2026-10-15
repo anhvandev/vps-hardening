@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/exp/teatest/v2"
@@ -88,9 +89,9 @@ func usersScreen(t *testing.T, tty *fakeTTY, setup ...func(*testHost, *usersSim)
 	m := harden.NewMachine(sim, h.host, h.root, io.Discard)
 	m.TmpDir = t.TempDir()
 	m.OpenTTY = func() (io.ReadWriteCloser, error) { return tty, nil }
-	tm := teatest.NewTestModel(t, New(m), teatest.WithInitialTermSize(120, 40))
+	tm := teatest.NewTestModel(t, New(m, time.Now()), teatest.WithInitialTermSize(120, 40))
 	waitFor(t, tm, "RAM")
-	tm.Type("jjjj")
+	tm.Type(menuTo("Users"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "LOCKED")
 	return h, tm, m.TmpDir

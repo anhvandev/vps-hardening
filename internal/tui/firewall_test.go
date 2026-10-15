@@ -113,7 +113,7 @@ func TestFirewallScreenFlow(t *testing.T) {
 	h.fake.Results["ss -Hltun"] = ssOut
 	tm := start(h)
 	waitFor(t, tm, "RAM")
-	tm.Type("jj")
+	tm.Type(menuTo("Firewall"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "Listening")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -131,7 +131,7 @@ func openFirewall(t *testing.T, h *testHost) *teatest.TestModel {
 	h.write("/run/.keep", "") // the lock lives under /run
 	tm := start(h)
 	waitFor(t, tm, "RAM")
-	tm.Type("jj")
+	tm.Type(menuTo("Firewall"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "Listening")
 	return tm

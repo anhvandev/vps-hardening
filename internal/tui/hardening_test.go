@@ -88,7 +88,7 @@ func startWizard(t *testing.T, h *testHost, sim *hardenSim, tty *fakeTTY, user s
 	t.Helper()
 	m := harden.NewMachine(sim, h.host, h.root, io.Discard)
 	m.OpenTTY = func() (io.ReadWriteCloser, error) { return tty, nil }
-	tm := teatest.NewTestModel(t, New(m), teatest.WithInitialTermSize(120, 40))
+	tm := teatest.NewTestModel(t, New(m, time.Now()), teatest.WithInitialTermSize(120, 40))
 	waitFor(t, tm, "NOT HARDENED")
 	tm.Type("h")
 	waitFor(t, tm, "Admin user")

@@ -110,7 +110,7 @@ func openTimersTUI(t *testing.T, h *testHost) *teatest.TestModel {
 	t.Helper()
 	tm := start(h)
 	waitFor(t, tm, "RAM")
-	tm.Type("jjjjjj")
+	tm.Type(menuTo("Timers"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "logrotate.timer")
 	return tm
