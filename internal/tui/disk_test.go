@@ -2,6 +2,7 @@ package tui
 
 import (
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -107,6 +108,33 @@ func TestDiskScanCancel(t *testing.T) {
 		t.Error("du still running after cancel")
 	}
 	wantAll(t, ctrlCView(t, tm), "Largest under / (depth 3) · scan cancelled")
+}
+
+// Leaving Disk through the sidebar, or quitting, stops a running scan.
+func TestDiskScanStopsOnSidebarAndQuit(t *testing.T) {
+	for _, leave := range []string{"sidebar", "quit"} {
+		t.Run(leave, func(t *testing.T) {
+			h := diskHost(t)
+			du, w := io.Pipe()
+			h.fake.Streams = map[string]io.ReadCloser{"du -x -B1 -d 3 /": du}
+			tm := openDisk(t, h)
+			tm.Type("s")
+			waitFor(t, tm, "scanning")
+			if leave == "sidebar" {
+				tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
+				tm.Type(strings.Repeat("k", slices.Index(items(), "Disk")-slices.Index(items(), "Overview")))
+				tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+				waitFor(t, tm, "Uptime")
+				if !pipeClosed(w) {
+					t.Error("du still running after leaving through the sidebar")
+				}
+			}
+			ctrlCView(t, tm)
+			if !pipeClosed(w) {
+				t.Error("du still running")
+			}
+		})
+	}
 }
 
 // A finished scan lists the largest directories, biggest first.

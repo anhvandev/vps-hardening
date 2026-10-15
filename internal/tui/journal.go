@@ -69,6 +69,10 @@ func (j journalView) stopFollow() journalView {
 	return j
 }
 
+// close stops following; the shell calls it when another screen opens or
+// the TUI quits.
+func (j journalView) close() { j.stopFollow() }
+
 // openJournal opens unit's journal on top of back, sized w×h, and starts
 // reading its tail.
 func openJournal(back tea.Model, m *harden.Machine, unit string, w, h int) (tea.Model, tea.Cmd) {

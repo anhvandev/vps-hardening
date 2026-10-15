@@ -219,7 +219,7 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A running Task is never abandoned (Stage A would stay without
 			// restore); at the Verify Gate ctrl+c means "Stop safely".
 			if !t.running() {
-				return t, tea.Quit
+				return t.quit()
 			}
 			t.busyNote = true
 			if t.task.gate != nil {
@@ -266,7 +266,7 @@ func (t Model) menuKey(key string) (tea.Model, tea.Cmd) {
 			t.busyNote = true
 			return t, nil
 		}
-		return t, tea.Quit
+		return t.quit()
 	case "t":
 		if t.task != nil {
 			t.task.shown = true
@@ -293,14 +293,25 @@ func (t Model) menuKey(key string) (tea.Model, tea.Cmd) {
 	return t, nil
 }
 
+// closeScreen tells the open screen to stop its work (follow, scan), if any.
+func (t Model) closeScreen() {
+	if c, ok := t.screen.(interface{ close() }); ok {
+		c.close()
+	}
+}
+
+// quit stops the open screen's work and quits.
+func (t Model) quit() (tea.Model, tea.Cmd) {
+	t.closeScreen()
+	return t, tea.Quit
+}
+
 // open builds a fresh screen for title and focuses it; unbuilt titles do nothing.
 func (t Model) open(title string) (tea.Model, tea.Cmd) {
 	if !shown(title) {
 		return t, nil
 	}
-	if c, ok := t.screen.(interface{ close() }); ok { // e.g. stop following logs
-		c.close()
-	}
+	t.closeScreen() // e.g. stop following logs
 	t.cursor = slices.Index(items(), title)
 	t.screen, t.focused, t.overlay, t.help, t.refresh = screens[title](t.m), true, false, false, t.now
 	t.readHardening()
