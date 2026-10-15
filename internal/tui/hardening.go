@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,14 +35,15 @@ var skipFlags = []string{"--skip-firewall", "--skip-fail2ban", "--skip-updates",
 // Gate in its panel and the private key shown raw outside the TUI
 // (rawKeyMachine) or written to the key file.
 type hardening struct {
-	m      *harden.Machine
-	loaded bool           // the Hardening Status was read
-	steps  []harden.Step  // the Hardening Status
-	rec    *harden.Record // nil without a Hardening Record
-	hst    bool           // the Hardening Status shows, not the wizard
-	table  table
-	w, ht  int
-	form   form // the wizard
+	m       *harden.Machine
+	loaded  bool           // the Hardening Status was read
+	steps   []harden.Step  // the Hardening Status
+	rec     *harden.Record // nil without a Hardening Record
+	lockWhy string         // the Lockout Guard's refusal to lock the Default Cloud Users
+	hst     bool           // the Hardening Status shows, not the wizard
+	table   table
+	w, ht   int
+	form    form // the wizard
 }
 
 func newHardening(m *harden.Machine) tea.Model {
@@ -59,14 +61,24 @@ func newHardening(m *harden.Machine) tea.Model {
 func (h hardening) Init() tea.Cmd {
 	return func() tea.Msg {
 		rec, _ := harden.LoadRecord(h.m.Root) // unreadable = none: live checks still tell Done/Missing
-		return hardeningMsg{h.m.Status(rec), rec}
+		msg := hardeningMsg{steps: h.m.Status(rec), rec: rec}
+		if i := slices.IndexFunc(msg.steps, func(s harden.Step) bool { return s.ID == "cloud-users" }); i >= 0 && msg.steps[i].State != harden.Done {
+			users, err := h.m.ManagedUsers()
+			if err == nil {
+				_, err = cloudUsersAdmin(users, rec)
+			}
+			if err != nil {
+				msg.lockWhy = err.Error()
+			}
+		}
+		return msg
 	}
 }
 
 func (h hardening) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hardeningMsg:
-		h.loaded, h.steps, h.rec = true, msg.steps, msg.rec
+		h.loaded, h.steps, h.rec, h.lockWhy = true, msg.steps, msg.rec, msg.lockWhy
 		h.hst = msg.steps[1].State == harden.Done // key-only SSH
 		h.table.setRows(h.rows())
 		return h, nil

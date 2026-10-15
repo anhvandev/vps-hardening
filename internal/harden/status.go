@@ -92,22 +92,32 @@ func (m *Machine) adminDone(users []user.ManagedUser, err error, rec *Record) (b
 	if err != nil {
 		return false, err.Error()
 	}
+	u, ok := AdminUser(users, rec)
+	if !ok {
+		return false, "no user with a key and passwordless sudo"
+	}
+	return true, fmt.Sprintf("%s · %d key%s", u.Name, u.Keys, map[bool]string{true: "s"}[u.Keys != 1])
+}
+
+// AdminUser is the Admin User among users: one the operator can log in as
+// and escalate with (Usable) that is not a Default Cloud User, the Record's
+// Admin User first. false when there is none.
+func AdminUser(users []user.ManagedUser, rec *Record) (user.ManagedUser, bool) {
 	var usable []user.ManagedUser
 	for _, u := range users {
-		if u.Usable() {
+		if u.Usable() && !slices.Contains(user.DefaultCloudUsers, u.Name) {
 			usable = append(usable, u)
 		}
 	}
 	if len(usable) == 0 {
-		return false, "no user with a key and passwordless sudo"
+		return user.ManagedUser{}, false
 	}
-	u := usable[0]
 	if rec != nil {
 		if i := slices.IndexFunc(usable, func(u user.ManagedUser) bool { return u.Name == rec.Admin }); i >= 0 {
-			u = usable[i]
+			return usable[i], true
 		}
 	}
-	return true, fmt.Sprintf("%s · %d key%s", u.Name, u.Keys, map[bool]string{true: "s"}[u.Keys != 1])
+	return usable[0], true
 }
 
 // cloudUsersLocked: every Default Cloud User present is locked with no key.
