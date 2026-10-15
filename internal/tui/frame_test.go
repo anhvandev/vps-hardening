@@ -34,7 +34,7 @@ func sizedHost(t *testing.T) *testHost {
 
 func TestWideFrame(t *testing.T) {
 	tm := startSized(sizedHost(t), 120, 40)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	v := quitView(t, tm)
 	wantAll(t, v, "prod-sg-01", "Ubuntu 24.04", "2 vCPU · 4 GB", "⚠ Hardening 5/9",
 		"SECURITY", "ACCESS", "WORKLOADS", "SYSTEM", "Hardening", "Task History", "? help", "q quit")
@@ -53,7 +53,7 @@ func TestBadgeOnUnhardenedHost(t *testing.T) {
 	h := sizedHost(t)
 	h.unharden()
 	tm := startSized(h, 120, 40)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	v := quitView(t, tm)
 	wantAll(t, v, "✗ NOT HARDENED")
 	if strings.Contains(v, "Hardening 5/9") {
@@ -97,16 +97,16 @@ func finalView(t *testing.T, tm *teatest.TestModel) string {
 // opens the whole sidebar over the content.
 func TestNarrowFrame(t *testing.T) {
 	tm := startSized(sizedHost(t), 90, 30)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	tm.Type("j") // Overview → Updates, still SYSTEM
 	v := finalView(t, tm)
-	wantAll(t, v, "SYSTEM  Overview · Updates · Disk · Swap · Task History", "tab menu", "5432/tcp")
+	wantAll(t, v, "SYSTEM  Overview · Updates · Disk · Swap · Task History", "tab menu", "Uptime")
 	if strings.Contains(v, "WORKLOADS") {
 		t.Errorf("full sidebar shown on a narrow terminal:\n%s", v)
 	}
 
 	tm = startSized(sizedHost(t), 90, 30)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
 	waitFor(t, tm, "WORKLOADS")
 	tm.Type("kkk") // Overview → Cron → Timers → Services
@@ -129,7 +129,7 @@ func TestClickSidebarOpensScreen(t *testing.T) {
 	h := sizedHost(t)
 	h.fake.Results["ss -Hltunp"] = ssOut
 	tm := startSized(h, 120, 40)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	tm.Send(click(5, 3)) // row 3: SECURITY, Hardening, Firewall
 	waitFor(t, tm, "esc back")
 	tm.Send(click(5, 9))  // the WORKLOADS heading: nothing happens
@@ -153,7 +153,7 @@ func TestClickBadgeOpensHardening(t *testing.T) {
 // Mouse capture is on by default; m turns it off so the terminal selects text.
 func TestMToggleMouse(t *testing.T) {
 	tm := startSized(sizedHost(t), 120, 40)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	tm.Type("m")
 	tm.Type("q")
 	if got := tm.FinalModel(t, teatest.WithFinalTimeout(3*time.Second)).View().MouseMode; got != tea.MouseModeNone {
@@ -161,7 +161,7 @@ func TestMToggleMouse(t *testing.T) {
 	}
 
 	tm = startSized(sizedHost(t), 120, 40)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	tm.Type("mm")
 	tm.Type("q")
 	if got := tm.FinalModel(t, teatest.WithFinalTimeout(3*time.Second)).View().MouseMode; got != tea.MouseModeCellMotion {
@@ -171,7 +171,7 @@ func TestMToggleMouse(t *testing.T) {
 
 func TestHelpOverlay(t *testing.T) {
 	tm := startSized(sizedHost(t), 120, 40)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	tm.Type("?")
 	waitFor(t, tm, "Shift+drag to select text")
 	tm.Type("x") // any key closes it
@@ -179,7 +179,7 @@ func TestHelpOverlay(t *testing.T) {
 	if strings.Contains(v, "Shift+drag") {
 		t.Errorf("help still shown:\n%s", v)
 	}
-	wantAll(t, v, "5432/tcp")
+	wantAll(t, v, "Uptime")
 }
 
 func TestASCIIFallback(t *testing.T) {
@@ -187,7 +187,7 @@ func TestASCIIFallback(t *testing.T) {
 	h := sizedHost(t)
 	h.unharden()
 	tm := startSized(h, 120, 40)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	v := finalView(t, tm)
 	wantAll(t, v, "x NOT HARDENED", "+ vpsctl - prod-sg-01 - Ubuntu 24.04", "> Overview")
 	if strings.ContainsAny(v, "●✓✗⚠▶◆▌─│┌") {

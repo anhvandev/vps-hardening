@@ -156,12 +156,15 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.holder == "" {
 			t.refused = ""
 		}
+		var cmd tea.Cmd // the open screen sees the clock too (Overview's "refreshed Ns ago")
+		t.screen, cmd = t.screen.Update(msg)
 		if msg.now.Sub(t.refresh) < refreshEvery {
-			return t, t.tick()
+			return t, tea.Batch(t.tick(), cmd)
 		}
 		t.refresh = msg.now
-		var cmd tea.Cmd
-		t.screen, cmd = t.screen.Update(refreshMsg{})
+		var rcmd tea.Cmd
+		t.screen, rcmd = t.screen.Update(refreshMsg{})
+		cmd = tea.Batch(cmd, rcmd)
 		return t, tea.Batch(t.tick(), cmd)
 	case startTaskMsg:
 		return t.startTask(msg)

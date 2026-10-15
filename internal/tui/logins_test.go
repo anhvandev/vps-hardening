@@ -80,6 +80,19 @@ func TestLoginsDefaultsTo24h(t *testing.T) {
 	}
 }
 
+// While open, Logins re-reads the journal on every refresh.
+func TestLoginsAutoRefreshes(t *testing.T) {
+	h := loginsHost(t)
+	tm := openLogins(t, h)
+	q := strings.Replace(loginsQuery, "%s", "24h", 1)
+	r := h.fake.Results[q]
+	r.Stdout += journalLine(1792050500, "15", "Failed password for root from 192.0.2.250 port 7001 ssh2")
+	h.fake.Results[q] = r
+	tm.Send(refreshMsg{})
+	waitFor(t, tm, "192.0.2.250")
+	closeLogins(t, tm)
+}
+
 func TestOverviewLoginsLine(t *testing.T) {
 	tm := start(loginsHost(t))
 	waitFor(t, tm, "Logins 24h")

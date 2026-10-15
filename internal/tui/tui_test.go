@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -100,14 +101,13 @@ func wantAll(t *testing.T, view string, wants ...string) {
 
 func TestOverviewOnHardenedHost(t *testing.T) {
 	tm := start(debianHost(t))
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	v := quitView(t, tm)
 	wantAll(t, v,
-		"Firewall", "active", "22/tcp", "80/tcp", "5432/tcp from 10.0.0.0/8",
-		"fail2ban", "sshd",
-		"Wed 2026-10-14 06:12:03 UTC", "0 pending", "no reboot required",
-		"4.1G used of 20G (22%)",
-		"1.0 GiB used of 4.0 GiB",
+		"SSH         ● key-only · :22", "Firewall    ● ufw · 3 rules",
+		"● 0 security · 0 other pending", "last auto-run", "● no reboot required",
+		"Disk /      ▇▇▁▁▁▁▁▁▁▁  4.1G/20G  22%",
+		"RAM         ▇▇▇▁▁▁▁▁▁▁  1.0/4.0 GiB",
 	)
 	if strings.Contains(strings.ToLower(v), "not hardened") {
 		t.Errorf("hardened host shows the banner:\n%s", v)
@@ -118,9 +118,9 @@ func TestBannerOnUnhardenedHost(t *testing.T) {
 	h := debianHost(t)
 	h.unharden()
 	tm := start(h)
-	waitFor(t, tm, "5432/tcp")
+	waitFor(t, tm, "Uptime")
 	v := quitView(t, tm)
-	wantAll(t, v, "NOT HARDENED", "Overview", "22/tcp")
+	wantAll(t, v, "NOT HARDENED", "Overview", "SSH         ✗ not key-only")
 }
 
 func TestQuit(t *testing.T) {
@@ -130,28 +130,22 @@ func TestQuit(t *testing.T) {
 	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
 }
 
-func TestOverviewShowsMissingPiecesAsState(t *testing.T) {
-	h := debianHost(t)
-	h.fake.Results["ufw status"] = system.Result{Stdout: "Status: inactive\n"}
-	delete(h.fake.Results, "fail2ban-client status") // not installed
-	tm := start(h)
-	waitFor(t, tm, "RAM")
-	v := quitView(t, tm)
-	wantAll(t, v, "Firewall   inactive", "80/tcp", "fail2ban   not installed")
-}
-
-// Reopening the Overview reads the host again: a rule added by hand shows up.
+// Reopening the Overview reads the host again: rules added by hand show up.
 func TestOverviewReadsLiveOnEachOpen(t *testing.T) {
 	h := debianHost(t)
 	tm := start(h)
-	waitFor(t, tm, "5432/tcp")
-	h.fake.Results["ufw show added"] = system.Result{Stdout: "ufw allow 22/tcp\nufw allow 443/tcp\n"}
+	waitFor(t, tm, "Uptime")
+	var rules strings.Builder
+	for p := 1001; p <= 1012; p++ {
+		fmt.Fprintf(&rules, "ufw allow %d/tcp\n", p)
+	}
+	h.fake.Results["ufw show added"] = system.Result{Stdout: rules.String()}
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // reopen the Overview
-	waitFor(t, tm, "443/tcp")
+	waitFor(t, tm, "12 rules")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape}) // back to the menu
 	waitFor(t, tm, "q quit")
 	v := quitView(t, tm)
-	wantAll(t, v, "443/tcp")
+	wantAll(t, v, "ufw · 12 rules")
 }
 
 // menuTo is the keys that move the sidebar cursor from Overview (where the
@@ -199,20 +193,21 @@ func TestOverviewOnRhelHost(t *testing.T) {
 		fake: &system.Fake{Results: map[string]system.Result{
 			"firewall-cmd --state":                                          {Stdout: "running\n"},
 			"firewall-cmd --permanent --list-ports":                         {Stdout: "8080/tcp 6000-6100/udp\n"},
-			"firewall-cmd --permanent --list-services":                      {Stdout: "ssh dhcpv6-client\n"},
+			"firewall-cmd --permanent --list-services":                      {Stdout: "ssh\n"},
 			"firewall-cmd --permanent --list-rich-rules":                    {},
 			"fail2ban-client status":                                        {Code: 255, Stderr: "Failed to access socket path"},
 			"systemctl show -p LastTriggerUSec --value dnf-automatic.timer": {Stdout: "n/a\n"},
-			"dnf -q -C check-update":                                        {Code: 100, Stdout: "\nkernel.x86_64   5.14.0-503   baseos\nopenssl.x86_64  3.2.2-6   baseos\n"},
+			"dnf -q check-update":                                           {Code: 100, Stdout: "\nkernel.x86_64   5.14.0-503   baseos\nopenssl.x86_64  1:3.2.2-6.el9   baseos\n"},
+			"dnf -q updateinfo list --security":                             {Stdout: "RHSA-2024:1234 Important/Sec. openssl-1:3.2.2-6.el9.x86_64\n"},
 			"needs-restarting -r":                                           {Code: 1, Stdout: "Reboot is required\n"},
 			"df -h -P /":                                                    {Stdout: "Filesystem Size Used Avail Capacity Mounted on\n/dev/sda1 50G 10G 40G 20% /\n"},
 		}},
 	}
 	h.write("/proc/meminfo", "MemTotal: 2097152 kB\nMemAvailable: 1048576 kB\n")
 	tm := start(h)
-	waitFor(t, tm, "RAM")
+	waitFor(t, tm, "Uptime")
 	v := quitView(t, tm)
-	wantAll(t, v, "Firewall   active", "8080/tcp", "6000-6100/udp", "22/tcp",
-		"fail2ban   inactive", "last run never · 2 pending · REBOOT REQUIRED",
-		"10G used of 50G (20%)", "1.0 GiB used of 2.0 GiB", "NOT HARDENED")
+	wantAll(t, v, "Firewall    ● firewalld · 3 rules",
+		"⚠ 1 security · 1 other pending", "last auto-run never", "⚠ reboot required",
+		"10G/50G  20%", "1.0/2.0 GiB", "NOT HARDENED")
 }

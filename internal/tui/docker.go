@@ -305,9 +305,8 @@ func dockerState(r system.Runner) string {
 	case err != nil:
 		return "not reachable: " + err.Error()
 	}
-	s := fmt.Sprintf("%d containers", len(cs))
 	if n := len(openPorts(cs)); n > 0 {
-		s += " · " + warnStyle.Render(glyph("⚠")) + " " + publishedPorts(n) + " bypassing the firewall"
+		return warnText(publishedPorts(n))
 	}
-	return s
+	return okText(fmt.Sprintf("%d containers", len(cs)))
 }
