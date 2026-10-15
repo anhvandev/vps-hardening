@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/harden"
@@ -102,4 +103,69 @@ func TestTimersListNextRunAndService(t *testing.T) {
 	v := view(openTimers(timerHost(t)))
 	wantAll(t, v, "Timer", "Next run", "Service",
 		"fstrim.timer", "logrotate.timer", "Thu 2026-10-15 00:00:00 UTC", "logrotate.service")
+}
+
+// openTimersTUI starts the TUI on h and focuses the loaded Timers screen.
+func openTimersTUI(t *testing.T, h *testHost) *teatest.TestModel {
+	t.Helper()
+	tm := start(h)
+	waitFor(t, tm, "RAM")
+	tm.Type("jjjjjj")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "logrotate.timer")
+	return tm
+}
+
+// Editing a packaged Timer writes an override; a failed verify applies
+// nothing and keeps the lock until the edit is discarded or re-applied.
+func TestTimersEditOverride(t *testing.T) {
+	h := timerHost(t)
+	h.fake.Results["systemd-analyze verify logrotate.timer"] = system.Result{Code: 1, Stderr: "override.conf:2: Unknown key name 'OnCalender'\n"}
+	h.fake.Results["systemctl daemon-reload"] = system.Result{}
+	fakeEditor(t, `[Timer]\nOnCalender=weekly\n`)
+	tm := openTimersTUI(t, h)
+	tm.Type("jE") // fstrim, logrotate
+	waitFor(t, tm, "enter re-edit · esc discard")
+	if !lockBusy(h) {
+		t.Error("global lock released while the edit is still open")
+	}
+	if _, err := os.Stat(service.OverridePath(h.root, "logrotate.timer")); !os.IsNotExist(err) {
+		t.Errorf("invalid override left behind: %v", err)
+	}
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "discarded edit of logrotate.timer")
+
+	h.fake.Results["systemd-analyze verify logrotate.timer"] = system.Result{}
+	fakeEditor(t, `[Timer]\nOnCalendar=\nOnCalendar=weekly\n`)
+	tm.Type("E")
+	waitFor(t, tm, "override for logrotate.timer applied, systemd reloaded")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+	if got := readFile(t, service.OverridePath(h.root, "logrotate.timer")); got != "[Timer]\nOnCalendar=\nOnCalendar=weekly\n" {
+		t.Errorf("override = %q", got)
+	}
+	if lockBusy(h) {
+		t.Error("global lock still held")
+	}
+	log := h.actionLog()
+	if !strings.Contains(log, "timer edit logrotate.timer: failed: ") || !strings.Contains(log, "timer edit logrotate.timer: ok") {
+		t.Errorf("action log:\n%s", log)
+	}
+}
+
+func TestTimersRevertOverride(t *testing.T) {
+	h := timerHost(t)
+	h.write("/etc/systemd/system/logrotate.timer.d/override.conf", "[Timer]\nOnCalendar=\nOnCalendar=weekly\n")
+	h.fake.Results["systemctl daemon-reload"] = system.Result{}
+	wantAll(t, view(openTimers(h, "jU")), "reverted logrotate.timer override, systemd reloaded")
+	if _, err := os.Stat(service.OverridePath(h.root, "logrotate.timer")); !os.IsNotExist(err) {
+		t.Errorf("override still there: %v", err)
+	}
+	if !slices.Contains(h.fake.Calls, "systemctl daemon-reload") {
+		t.Errorf("not reloaded: %q", h.fake.Calls)
+	}
+	if log := h.actionLog(); !strings.Contains(log, "timer revert logrotate.timer: ok") {
+		t.Errorf("action log:\n%s", log)
+	}
 }

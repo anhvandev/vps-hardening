@@ -15,7 +15,8 @@ import (
 func init() { screens["Timers"] = newTimers }
 
 // timersScreen lists Timers read live, with their next run and target Service.
-// n opens the new-Timer form (created, enabled and started on enter).
+// n opens the new-Timer form (created, enabled and started on enter); E edits
+// the selected Timer's override in $EDITOR, U reverts it (timers_edit.go).
 type timersScreen struct {
 	m      *harden.Machine
 	loaded bool
@@ -23,8 +24,9 @@ type timersScreen struct {
 	err    error // list unreadable
 	cursor int
 	status string
-	form   []string // new-Timer form values (timerFields), nil if closed
-	field  int      // form field being typed into
+	form   []string  // new-Timer form values (timerFields), nil if closed
+	field  int       // form field being typed into
+	edit   *unitEdit // override being edited, nil if none
 }
 
 // timerFields are the new-Timer form's labels, in service.TimerSpec order.
@@ -56,6 +58,9 @@ func (s timersScreen) reload(status string) tea.Cmd {
 }
 
 func (s timersScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if s, cmd, ok := s.editUpdate(msg); ok {
+		return s, cmd
+	}
 	switch msg := msg.(type) {
 	case timersMsg:
 		s.list, s.err, s.status, s.loaded = msg.list, msg.err, msg.status, true
@@ -175,7 +180,7 @@ func (s timersScreen) View() tea.View {
 		lines[s.cursor+1] = selectedStyle.Render(lines[s.cursor+1])
 		b.WriteString(strings.Join(lines, "\n"))
 	}
-	b.WriteString("\n\n" + dimStyle.Render("↑/↓ move · n new") + "\n")
+	b.WriteString("\n\n" + dimStyle.Render("↑/↓ move · n new · E edit · U revert") + "\n")
 	if s.status != "" {
 		b.WriteString("\n" + s.status)
 	}
