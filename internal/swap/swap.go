@@ -229,28 +229,7 @@ func editFstab(root string, on bool) error {
 	if on {
 		lines = append(lines, fstabLine+"\n")
 	}
-	return writeAtomic(path, []byte(strings.Join(lines, "")))
-}
-
-// writeAtomic replaces path with data via a temp file beside it, so a
-// failure never leaves a half-written fstab.
-func writeAtomic(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".vpsctl-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name()) // no-op after rename
-	_, err = f.Write(data)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Chmod(f.Name(), 0o644)
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), path)
-	}
-	return err
+	return system.WriteAtomic(path, []byte(strings.Join(lines, "")), 0o644, nil) // never a half-written fstab
 }
 
 // run runs a command; a non-zero exit is an error with its stderr.

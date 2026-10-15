@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/anhvandev/vpsctl/internal/system"
 )
 
 // RecordPath holds the Hardening Record.
@@ -48,19 +50,7 @@ func (r Record) Save(root string) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(p), ".hardening-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name()) // no-op after the rename
-	_, err = f.Write(append(b, '\n'))
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), p)
+	return system.WriteAtomic(p, append(b, '\n'), 0o600, nil)
 }
 
 // SaveRecord saves r under the machine's root.
