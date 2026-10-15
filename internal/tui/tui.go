@@ -166,7 +166,7 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return t, tea.Batch(t.tick(), cmd)
 	case startTaskMsg:
 		return t.startTask(msg)
-	case taskStepMsg, taskLineMsg, taskEndMsg, taskGateMsg, taskTermMsg:
+	case taskStepMsg, taskWarnMsg, taskLineMsg, taskEndMsg, taskGateMsg, taskTermMsg:
 		return t.taskUpdate(msg)
 	case backMsg:
 		t.focused = false

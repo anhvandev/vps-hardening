@@ -11,11 +11,13 @@ package tui
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,11 +47,15 @@ type startTaskMsg struct {
 	// History entry is written, as ok, before it runs; it fails into a
 	// second entry.
 	logFirst bool
+	// summarize, when set, is the Done card's summary, read once the steps
+	// ran (Hardening's SUMMARY).
+	summarize func() string
 }
 
 // runTask is the command a screen returns to run a Task named name, recorded
 // in Task History as action, whose Done card shows summary. Steps run in
-// order; the first error fails the Task. A Task already running, here or in
+// order; the first error fails the Task, except a harden.Warning: that step
+// is marked warned and the Task goes on. A Task already running, here or in
 // another session (global lock), refuses it: nothing runs or is recorded.
 func runTask(name, action, summary string, steps ...taskStep) tea.Cmd {
 	return func() tea.Msg { return startTaskMsg{name: name, action: action, summary: summary, steps: steps} }
@@ -61,8 +67,12 @@ type taskDoneMsg struct{}
 // Progress of the running Task, sent by its goroutine in order.
 type (
 	taskStepMsg int    // this step started
+	taskWarnMsg int    // this step ended with a harden.Warning
 	taskLineMsg string // one output line
-	taskEndMsg  struct{ err error }
+	taskEndMsg  struct {
+		err     error
+		summary string // the summary read at the end, "" to keep the first
+	}
 	taskGateMsg struct { // waits at the Verify Gate for the answer on reply
 		command string
 		reply   chan<- bool
@@ -115,7 +125,8 @@ func taskMachine(m *harden.Machine, r system.Runner) *harden.Machine {
 type task struct {
 	name, summary string
 	steps         []string
-	cur           int // step running, or the one that failed
+	cur           int   // step running, or the one that failed
+	warned        []int // steps that ended with a warning
 	lines         []string
 	ended         bool
 	err           error
@@ -164,7 +175,7 @@ func (s startTaskMsg) run(root string, r system.Runner, lk *os.File, at time.Tim
 	fmt.Fprintf(file, "Task: %s (%s)\n", s.name, s.action)
 	out := &lineWriter{file: file, ch: ch}
 	var err error
-	result := "Done: " + s.summary
+	result := ""
 	logged := false
 	for i, st := range s.steps {
 		ch <- taskStepMsg(i)
@@ -173,19 +184,30 @@ func (s startTaskMsg) run(root string, r system.Runner, lk *os.File, at time.Tim
 			actionlog.AppendAt(filepath.Join(root, actionlog.LogPath), at, s.action, logResult(nil))
 			logged = true
 		}
-		if err = st.do(teeRunner{r, out}, out); err != nil {
-			out.flush()
+		err = st.do(teeRunner{r, out}, out)
+		out.flush()
+		if errors.As(err, new(harden.Warning)) {
+			ch <- taskWarnMsg(i)
+			err = nil
+		}
+		if err != nil {
 			result = fmt.Sprintf("step %d/%d %q %s", i+1, len(s.steps), st.name, logResult(err))
 			break
 		}
-		out.flush()
+	}
+	var summary string
+	if err == nil {
+		if s.summarize != nil {
+			summary = s.summarize()
+		}
+		result = "Done: " + cmp.Or(summary, s.summary)
 	}
 	fmt.Fprintln(file, result)
 	if !logged || err != nil {
 		actionlog.AppendAt(filepath.Join(root, actionlog.LogPath), at, s.action, logResult(err)) // failures to log are ignored
 	}
 	lk.Close()
-	ch <- taskEndMsg{err}
+	ch <- taskEndMsg{err, summary}
 }
 
 // lineWriter turns a Task's output into lines: each goes to the output file
@@ -264,6 +286,8 @@ func (t Model) taskUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case taskStepMsg:
 		k.cur = int(msg)
+	case taskWarnMsg:
+		k.warned = append(k.warned, int(msg))
 	case taskLineMsg:
 		k.lines = append(k.lines, string(msg))
 	case taskGateMsg:
@@ -272,6 +296,7 @@ func (t Model) taskUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return t, tea.Batch(tea.Exec(msg.lease, nil), k.wait)
 	case taskEndMsg:
 		k.ended, k.err, k.end = true, msg.err, time.Now()
+		k.summary = cmp.Or(msg.summary, k.summary)
 		t.busyNote = false
 		t.readHardening()
 		var cmd tea.Cmd
@@ -377,6 +402,9 @@ func (t Model) taskStatus() string {
 	case k.err != nil:
 		return errStyle.Render(glyph("✗")+" "+k.name+": Failed") + "   (click to open)"
 	}
+	if len(k.warned) > 0 {
+		return warnStyle.Render(glyph("⚠")+" "+k.name+": Done with warnings") + "   (click to open)"
+	}
 	return okStyle.Render(glyph("✓")+" "+k.name+": Done") + "   (click to open)"
 }
 
@@ -400,6 +428,8 @@ func (t Model) panel(w, h int) []string {
 		for i, s := range k.steps {
 			mark := glyph("·")
 			switch {
+			case slices.Contains(k.warned, i):
+				mark = warnStyle.Render(glyph("⚠"))
 			case i < k.cur:
 				mark = okStyle.Render(glyph("✓"))
 			case i == k.cur:
@@ -437,7 +467,15 @@ func (t Model) panel(w, h int) []string {
 			body = append(body, strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")...)
 		} else {
 			state = okStyle.Render(glyph("✓") + " Done in " + mmss(k.end.Sub(k.start)))
-			body = append(body, "SUMMARY  "+k.summary)
+			if len(k.warned) > 0 {
+				state = warnStyle.Render(glyph("⚠") + " Done with warnings in " + mmss(k.end.Sub(k.start)))
+			}
+			for i, l := range strings.Split(k.summary, "\n") {
+				body = append(body, map[bool]string{true: "SUMMARY  ", false: "         "}[i == 0]+l)
+			}
+			for _, i := range k.warned {
+				body = append(body, warnStyle.Render(glyph("⚠")+" "+k.steps[i]+": not applied, see the output"))
+			}
 		}
 		if k.full {
 			output(h - len(body) - 4)

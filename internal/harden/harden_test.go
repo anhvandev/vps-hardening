@@ -36,9 +36,11 @@ func (h *fakeHost) InstallKey(_, _ string, _, waitSaved bool) error {
 	h.waitSaved = waitSaved
 	return h.step("key")
 }
-func (h *fakeHost) CurrentPort() (int, error)        { return h.plan.OldPort, h.step("port") }
-func (h *fakeHost) PreLockAssertions(string) error   { return h.step("assert") }
-func (h *fakeHost) LockDefaultCloudUsers() error     { return h.step("lock") }
+func (h *fakeHost) CurrentPort() (int, error)      { return h.plan.OldPort, h.step("port") }
+func (h *fakeHost) PreLockAssertions(string) error { return h.step("assert") }
+func (h *fakeHost) LockDefaultCloudUsers() ([]string, error) {
+	return []string{"ubuntu"}, h.step("lock")
+}
 func (h *fakeHost) BlockCloudInitReinjection() error { return h.step("cloudinit") }
 func (h *fakeHost) Fail2ban(int) error               { return h.step("fail2ban") }
 func (h *fakeHost) AutoUpdates() error               { return h.step("updates") }
@@ -139,6 +141,34 @@ func TestSkipFlagsAndOptionalStepFailuresAreNotFatal(t *testing.T) {
 	}
 }
 
+// The SUMMARY says which Default Cloud Users were locked and which optional
+// steps failed; the TUI's Steps give the same summary.
+func TestSummaryNamesLockedUsersAndFailedSteps(t *testing.T) {
+	h := newHost()
+	h.fail["fail2ban"] = true
+	var out strings.Builder
+	if err := Run(Options{User: "alice", Yes: true}, h, &out, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := "admin alice · ssh :2222 · password auth off · root login off\n" +
+		"Default Cloud Users locked: ubuntu\nfail2ban not applied: fail2ban failed"
+	if !strings.Contains(out.String(), "== SUMMARY ==\n"+want+"\n") {
+		t.Errorf("output:\n%s", out.String())
+	}
+
+	h = newHost()
+	h.fail["fail2ban"] = true
+	steps, summary := Steps(Options{User: "alice", Yes: true})
+	for _, s := range steps {
+		if err := s.Do(h, io.Discard, nil); err != nil && !errors.As(err, new(Warning)) {
+			t.Fatalf("%s: %v", s.Name, err)
+		}
+	}
+	if summary() != want {
+		t.Errorf("summary %q, want %q", summary(), want)
+	}
+}
+
 // The skip-flag warnings come in a fixed order.
 func TestSkipWarningsInOrder(t *testing.T) {
 	for range 20 {
@@ -191,7 +221,8 @@ func TestStoppedRunSavesAppliedSoFar(t *testing.T) {
 // Steps are the run's Hardening Steps, without the skipped ones.
 func TestStepsLeaveOutSkipped(t *testing.T) {
 	var names []string
-	for _, s := range Steps(Options{User: "alice", SkipFirewall: true, SkipSysctl: true}) {
+	steps, _ := Steps(Options{User: "alice", SkipFirewall: true, SkipSysctl: true})
+	for _, s := range steps {
 		names = append(names, s.Name)
 	}
 	want := []string{"Admin User + key", "Key-only SSH, no root login (Verify Gate)", "Default Cloud Users locked",

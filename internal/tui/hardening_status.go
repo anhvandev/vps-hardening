@@ -67,7 +67,8 @@ func lockCloudUsers(m, tm *harden.Machine) error {
 	if err := tm.PreLockAssertions(admin); err != nil {
 		return fmt.Errorf("pre-lock assertion failed: %w", err)
 	}
-	return tm.LockDefaultCloudUsers()
+	_, err = tm.LockDefaultCloudUsers()
+	return err
 }
 
 // readHardening re-reads the Hardening Status behind the header badge: SSH
@@ -133,26 +134,27 @@ var stepLinks = map[string]struct{ screen, label string }{
 	"port":  {"SSH", "Change in SSH"},
 }
 
-// stepApply applies one Hardening Step alone, the way Hardening does.
-var stepApply = map[string]func(*harden.Machine) error{
-	"firewall": func(m *harden.Machine) error {
+// stepApply applies one Hardening Step alone, the way Hardening does, on
+// tm, the Task step's Machine; m is the screen's (read secrets through it).
+var stepApply = map[string]func(m, tm *harden.Machine) error{
+	"firewall": func(_, m *harden.Machine) error {
 		port, err := m.CurrentPort()
 		if err == nil {
 			_, err = m.EnsureFirewall(port)
 		}
 		return err
 	},
-	"cloud-users": (*harden.Machine).LockDefaultCloudUsers, // guarded: apply runs lockCloudUsers
-	"cloud-init":  (*harden.Machine).BlockCloudInitReinjection,
-	"fail2ban": func(m *harden.Machine) error {
+	"cloud-users": lockCloudUsers,
+	"cloud-init":  func(_, m *harden.Machine) error { return m.BlockCloudInitReinjection() },
+	"fail2ban": func(_, m *harden.Machine) error {
 		port, err := m.CurrentPort()
 		if err != nil {
 			return err
 		}
 		return m.Fail2ban(port)
 	},
-	"updates": (*harden.Machine).AutoUpdates,
-	"sysctl":  (*harden.Machine).Sysctl,
+	"updates": func(_, m *harden.Machine) error { return m.AutoUpdates() },
+	"sysctl":  func(_, m *harden.Machine) error { return m.Sysctl() },
 }
 
 // act presses the selected row's button: Apply, or open the linked screen.
@@ -204,11 +206,7 @@ func (h hardening) apply(name string, steps ...harden.Step) tea.Cmd {
 	for _, s := range steps {
 		ids, names = append(ids, s.ID), append(names, s.Name)
 		ts = append(ts, taskStep{s.Name, func(r system.Runner, _ io.Writer) error {
-			tm, do := taskMachine(h.m, r), stepApply[s.ID]
-			if s.ID == "cloud-users" {
-				do = func(tm *harden.Machine) error { return lockCloudUsers(h.m, tm) }
-			}
-			if err := do(tm); err != nil {
+			if err := stepApply[s.ID](h.m, taskMachine(h.m, r)); err != nil {
 				return err
 			}
 			return recordApplied(h.m.Root, s.ID)

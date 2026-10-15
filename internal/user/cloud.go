@@ -9,24 +9,26 @@ import (
 
 // LockDefaultCloudUsers locks every Default Cloud User present: empties its
 // authorized_keys, locks the password and sets a nologin shell. Never deletes.
-func (m *Manager) LockDefaultCloudUsers() error {
+// locked names the users it locked.
+func (m *Manager) LockDefaultCloudUsers() (locked []string, err error) {
 	for _, u := range DefaultCloudUsers {
 		pw, exists, err := m.Lookup(u)
 		if err != nil {
-			return err
+			return locked, err
 		}
 		if !exists {
 			continue
 		}
 		err = os.Truncate(filepath.Join(m.Root, pw.Home, ".ssh", "authorized_keys"), 0)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
+			return locked, err
 		}
 		if err := m.run("usermod", "-L", "-s", "/usr/sbin/nologin", u); err != nil {
-			return err
+			return locked, err
 		}
+		locked = append(locked, u)
 	}
-	return nil
+	return locked, nil
 }
 
 // BlockCloudInitReinjection writes a cloud-init drop-in so the next boot does

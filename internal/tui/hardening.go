@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -140,13 +139,15 @@ func (h hardening) start() (tea.Model, tea.Cmd) {
 		port, _ = h.m.CurrentPort()
 	}
 	var steps []taskStep
-	for _, s := range harden.Steps(o) {
+	runSteps, summary := harden.Steps(o)
+	for _, s := range runSteps {
 		steps = append(steps, taskStep{s.Name, func(r system.Runner, out io.Writer) error {
 			return s.Do(rawKeyMachine(taskMachine(h.m, r), taskTerminal(out)), out, taskGate(out, gateCommand(h.m.Root, port, o.User)))
 		}})
 	}
-	summary := fmt.Sprintf("admin %s · ssh :%d · password auth off · root login off", o.User, port)
-	return h, runTask("Hardening", "harden "+strings.Join(args, " "), summary, steps...)
+	return h, func() tea.Msg {
+		return startTaskMsg{name: "Hardening", action: "harden " + strings.Join(args, " "), steps: steps, summarize: summary}
+	}
 }
 
 // layout is the Hardening Status, or the wizard: header with the badge, the
