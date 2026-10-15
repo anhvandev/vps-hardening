@@ -150,7 +150,7 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return t, t.tick()
 	case startTaskMsg:
 		return t.startTask(msg)
-	case taskStepMsg, taskLineMsg, taskEndMsg:
+	case taskStepMsg, taskLineMsg, taskEndMsg, taskGateMsg, taskTermMsg:
 		return t.taskUpdate(msg)
 	case backMsg:
 		t.focused = false
@@ -215,6 +215,9 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return t, tea.Quit
 			}
 			t.busyNote = true
+			if t.running() && t.task.gate != nil {
+				return t.panelKey("ctrl+c")
+			}
 			if !t.busy() {
 				return t, nil
 			}
