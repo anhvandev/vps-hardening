@@ -7,40 +7,72 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/harden"
+	"github.com/anhvandev/vpsctl/internal/release"
 	"github.com/anhvandev/vpsctl/internal/system"
+	"github.com/anhvandev/vpsctl/internal/tui"
 )
 
 // version is set at build time: -ldflags "-X main.version=v1.2.3".
 var version = "dev"
 
-const (
-	lockPath = "/run/vpsctl.lock"
-	logDir   = "/var/log/vpsctl"
-)
+// lock takes the shared global mutation lock.
+var lock = actionlog.Lock
 
-const usage = `usage: vpsctl harden --user NAME [--port N] [--yes] [--key-out PATH] [--rotate-key]
+const usage = `usage: vpsctl                 (management TUI)
+       vpsctl harden --user NAME [--port N] [--yes] [--key-out PATH] [--rotate-key]
                      [--skip-firewall] [--skip-fail2ban] [--skip-updates] [--skip-sysctl]
+       vpsctl self-update
        vpsctl version`
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("vpsctl: TUI not implemented yet; use `vpsctl harden`")
-		return
+		os.Exit(runTUI())
 	}
 	switch os.Args[1] {
 	case "version":
 		fmt.Println(version)
 	case "harden":
 		os.Exit(runHarden(os.Args[2:]))
+	case "self-update":
+		os.Exit(runSelfUpdate())
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
+}
+
+// runTUI opens the management TUI after the root + systemd preflight.
+func runTUI() int {
+	if err := system.Preflight(os.Geteuid(), "/run/systemd/system"); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	h, err := system.Detect(system.Exec{}, "/etc/os-release")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	m := harden.NewMachine(system.Exec{}, h, "", io.Discard)
+	p := tea.NewProgram(tui.New(m))
+	go func() { // non-blocking; offline or any failure stays silent
+		// ponytail: "newer" means "not the latest tag", no semver ordering; add it if pre-releases ship.
+		if tag, err := release.Latest(release.BaseURL); err == nil && tag != version {
+			p.Send(tui.NewVersionMsg(tag))
+		}
+	}()
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	return 0
 }
 
 // runHarden returns the exit code: 0 ok, 1 error, 2 usage, 3 stopped at the Verify Gate.
@@ -54,7 +86,7 @@ func runHarden(args []string) int {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
 	}
-	lk, err := lock(lockPath)
+	lk, err := lock(actionlog.LockPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
@@ -62,19 +94,14 @@ func runHarden(args []string) int {
 	defer lk.Close()
 
 	// The log never sees the private key: it goes straight to the TTY or --key-out.
-	if err := os.MkdirAll(logDir, 0o700); err != nil {
-		fmt.Fprintln(os.Stderr, "ERROR:", err)
-		return 1
-	}
-	logPath := fmt.Sprintf("%s/harden-%s.log", logDir, time.Now().Format("20060102-150405"))
-	logf, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	logf, err := harden.OpenLog("")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
 	}
 	defer logf.Close()
 	out, errOut := io.MultiWriter(os.Stdout, logf), io.MultiWriter(os.Stderr, logf)
-	fmt.Fprintln(out, "[*] logging to", logPath)
+	fmt.Fprintln(out, "[*] logging to", logf.Name())
 
 	err = hardenHost(o, out)
 	result, code := "ok", 0
@@ -86,8 +113,50 @@ func runHarden(args []string) int {
 		fmt.Fprintln(errOut, "ERROR:", err)
 		result, code = "failed", 1
 	}
-	logAction("harden "+strings.Join(args, " "), result)
+	actionlog.Append(actionlog.LogPath, "harden "+strings.Join(args, " "), result) // failures to log are ignored
 	return code
+}
+
+// runSelfUpdate replaces the running binary with the latest release.
+func runSelfUpdate() int {
+	if err := system.Preflight(os.Geteuid(), "/run/systemd/system"); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	return selfUpdate(release.BaseURL, exe, actionlog.LockPath, actionlog.LogPath, os.Stdout)
+}
+
+// selfUpdate updates exe from the releases at base under the global lock and
+// logs "self-update <old> → <new>" to the action log at logPath.
+func selfUpdate(base, exe, lockPath, logPath string, out io.Writer) int {
+	lk, err := lock(lockPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	defer lk.Close()
+
+	tag, err := release.Update(base, version, exe)
+	switch {
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "ERROR: self-update:", err)
+		actionlog.Append(logPath, "self-update "+version, "failed")
+		return 1
+	case tag == version:
+		fmt.Fprintln(out, "vpsctl", version, "is already the latest release")
+		return 0
+	}
+	fmt.Fprintf(out, "vpsctl updated %s → %s\n", version, tag)
+	actionlog.Append(logPath, "self-update "+version+" → "+tag, "ok")
+	return 0
 }
 
 func hardenHost(o harden.Options, out io.Writer) error {
@@ -110,6 +179,17 @@ func askTTY(question string) (bool, error) {
 		return false, fmt.Errorf("no controlling TTY: %w", err)
 	}
 	defer tty.Close()
+	return ask(tty, question)
+}
+
+// tcflsh is TCFLSH on linux amd64/arm64 (missing from syscall on amd64).
+const tcflsh = 0x540b
+
+// ask prints question on tty and reads the answer. Keys typed earlier
+// (e.g. Enter while harden was busy) are discarded first so they can't
+// answer the question.
+func ask(tty *os.File, question string) (bool, error) {
+	syscall.Syscall(syscall.SYS_IOCTL, tty.Fd(), tcflsh, syscall.TCIFLUSH)
 	fmt.Fprintf(tty, "%s [y/N] ", question)
 	line, err := bufio.NewReader(tty).ReadString('\n')
 	if err != nil && line == "" {
@@ -117,37 +197,4 @@ func askTTY(question string) (bool, error) {
 	}
 	a := strings.ToLower(strings.TrimSpace(line))
 	return a == "y" || a == "yes", nil
-}
-
-// lock takes the global mutation lock at path; the kernel drops it when the process exits.
-func lock(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		holder, _ := io.ReadAll(f)
-		f.Close()
-		return nil, fmt.Errorf("locked by %s", strings.TrimSpace(string(holder)))
-	}
-	f.Truncate(0)
-	fmt.Fprintf(f, "%s (pid %d)\n", operator(), os.Getpid())
-	return f, nil
-}
-
-// logAction appends one line to the action log; failures to log are ignored.
-func logAction(action, result string) {
-	f, err := os.OpenFile(logDir+"/actions.log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s %s %s: %s\n", time.Now().Format(time.RFC3339), operator(), action, result)
-}
-
-func operator() string {
-	if u := os.Getenv("SUDO_USER"); u != "" {
-		return u
-	}
-	return "root"
 }

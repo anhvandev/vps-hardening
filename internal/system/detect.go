@@ -2,6 +2,7 @@ package system
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"strconv"
@@ -20,6 +21,10 @@ type Host struct {
 	AdminGroup string // "sudo" (debian family) or "wheel"
 	PkgManager string // "apt", "dnf", or "" when unknown
 }
+
+// SessionUser is the operator: the login user behind sudo (SUDO_USER), ""
+// when root logged in directly (e.g. on the provider console).
+func SessionUser() string { return os.Getenv("SUDO_USER") }
 
 // supported maps os-release ID to supported VERSION_IDs (major only on RHEL-likes).
 var supported = map[string][]string{
@@ -61,6 +66,12 @@ func Detect(r Runner, osReleasePath string) (Host, error) {
 		h.SSHUnit, h.AdminGroup, h.PkgManager = "ssh", "sudo", "apt"
 	case "rhel":
 		h.PkgManager = "dnf"
+	}
+
+	// While PID 1 is still booting, systemctl can't reach it and prints its
+	// state only to stderr; every unit would then look disabled.
+	if res, err := r.Run("systemctl", "is-system-running"); err == nil && strings.TrimSpace(res.Stdout) == "" {
+		return Host{}, fmt.Errorf("systemd not reachable (still booting?), retry in a few seconds: %s", strings.TrimSpace(res.Stderr))
 	}
 
 	// Socket activation: enabled-but-inactive counts too (Ubuntu 24.04+).

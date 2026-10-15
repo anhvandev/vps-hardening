@@ -1,6 +1,12 @@
 package system
 
-import "testing"
+import (
+	"bufio"
+	"io"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestExecCapturesStdoutStderrAndExitCode(t *testing.T) {
 	res, err := Exec{}.Run("sh", "-c", "echo out; echo err >&2; exit 3")
@@ -15,6 +21,42 @@ func TestExecCapturesStdoutStderrAndExitCode(t *testing.T) {
 func TestExecMissingBinaryIsError(t *testing.T) {
 	if _, err := (Exec{}).Run("vpsctl-no-such-binary"); err == nil {
 		t.Fatal("expected error for missing binary")
+	}
+}
+
+// Close stops a stream that would otherwise run for a long time.
+func TestExecStreamReadsUntilClosed(t *testing.T) {
+	rc, err := Exec{}.Stream("sh", "-c", "echo first; exec sleep 60")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(rc).ReadString('\n')
+	if err != nil || line != "first\n" {
+		t.Fatalf("read %q, %v", line, err)
+	}
+	start := time.Now()
+	if err := rc.Close(); err != nil {
+		t.Errorf("close: %v", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Error("close did not stop the process")
+	}
+}
+
+func TestFakeStreamReturnsScriptedReader(t *testing.T) {
+	f := &Fake{Streams: map[string]io.ReadCloser{"journalctl -f": io.NopCloser(strings.NewReader("a\n"))}}
+	rc, err := f.Stream("journalctl", "-f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := io.ReadAll(rc); string(b) != "a\n" {
+		t.Errorf("read %q", b)
+	}
+	if _, err := f.Stream("journalctl"); err == nil {
+		t.Error("unscripted stream must return an error")
+	}
+	if len(f.Calls) != 2 || f.Calls[0] != "journalctl -f" {
+		t.Errorf("calls: %q", f.Calls)
 	}
 }
 

@@ -148,3 +148,17 @@ func TestDetectMissingOSReleaseIsError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// Right after boot systemctl can't reach PID 1 yet; every unit then looks
+// disabled, so socket mode would be silently missed. Detect must refuse.
+func TestDetectSystemdUnreachableIsError(t *testing.T) {
+	bus := Result{Stderr: "Failed to connect to bus: No such file or directory\n", Code: 1}
+	f := &Fake{Results: map[string]Result{
+		"systemctl is-system-running":     bus,
+		"systemctl is-enabled ssh.socket": bus,
+		"systemctl is-active ssh.socket":  bus,
+	}}
+	if _, err := Detect(f, filepath.Join("testdata", "ubuntu-24.04")); err == nil {
+		t.Fatal("expected error when systemd is unreachable")
+	}
+}
