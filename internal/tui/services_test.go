@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -68,6 +69,31 @@ func TestServicesListFilterAndToggle(t *testing.T) {
 	wantAll(t, v, "/ post", "postfix.service")
 	if strings.Contains(v, "cron.service") {
 		t.Errorf("name filter did not narrow:\n%s", v)
+	}
+}
+
+// SINCE is how long each Service has been in its state, a failed one's
+// NOTE says how it ended, and the detail box has the memory and main PID:
+// all from one systemctl show of the listed Services.
+func TestServicesSinceExitMemPID(t *testing.T) {
+	h := svcHost(t)
+	ts := func(ago time.Duration) string { return time.Now().Add(-ago).Format("Mon 2006-01-02 15:04:05 MST") }
+	h.fake.Results["systemctl show -p Id,StateChangeTimestamp,Result,ExecMainStatus,MemoryCurrent,MainPID "+
+		"cron.service nginx.service postfix.service redis.service ssh.service"] = system.Result{Stdout: "" +
+		"Id=cron.service\nStateChangeTimestamp=" + ts(12*24*time.Hour+time.Hour) + "\nResult=success\nExecMainStatus=0\nMemoryCurrent=39845888\nMainPID=811\n\n" +
+		"Id=nginx.service\nStateChangeTimestamp=" + ts(3*time.Minute+5*time.Second) + "\nResult=exit-code\nExecMainStatus=1\nMemoryCurrent=[not set]\nMainPID=0\n\n" +
+		"Id=postfix.service\nStateChangeTimestamp=\nResult=success\nExecMainStatus=0\nMemoryCurrent=[not set]\nMainPID=0\n\n" +
+		"Id=redis.service\nStateChangeTimestamp=\nResult=success\nExecMainStatus=0\nMemoryCurrent=[not set]\nMainPID=0\n\n" +
+		"Id=ssh.service\nStateChangeTimestamp=" + ts(12*24*time.Hour) + "\nResult=success\nExecMainStatus=0\nMemoryCurrent=5242880\nMainPID=700\n"}
+	v := view(openServicesWith(h, ""))
+	wantAll(t, v, "SINCE", "mem 38 MB · pid 811")
+	for _, re := range []string{`cron\.service .* 12d `, `nginx\.service .* 3m +exit 1`, `redis\.service .* — `} {
+		if !regexp.MustCompile(re).MatchString(v) {
+			t.Errorf("no %s:\n%s", re, v)
+		}
+	}
+	if n := strings.Count(strings.Join(h.fake.Calls, "\n"), "systemctl show"); n != 1 {
+		t.Errorf("systemctl show ran %d times, want 1", n)
 	}
 }
 
