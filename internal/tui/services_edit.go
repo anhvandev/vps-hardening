@@ -24,6 +24,7 @@ type unitEdit struct {
 	tmp        string // the copy the editor works on
 	orig       string // path's content (or template) before editing
 	failed     bool   // the last apply failed: enter re-edits, esc discards
+	create     bool   // path is a new unit: applied with service.Create
 }
 
 // editedMsg is the editor exiting; appliedMsg is the edit's apply finishing.
@@ -83,7 +84,7 @@ func (s servicesScreen) editUpdate(msg tea.Msg) (_ servicesScreen, _ tea.Cmd, ok
 		switch {
 		case msg.err != nil || err != nil:
 			s.status = "editor failed: " + cmp.Or(msg.err, err).Error()
-		case string(content) == s.edit.orig:
+		case string(content) == s.edit.orig && !s.edit.create:
 			s.status = "no changes to " + s.edit.unit
 		default:
 			return s, s.applyEdit(content), true
@@ -94,6 +95,10 @@ func (s servicesScreen) editUpdate(msg tea.Msg) (_ servicesScreen, _ tea.Cmd, ok
 	case appliedMsg:
 		s.list, s.err, s.status = msg.list, msg.err, msg.status
 		if msg.ok {
+			if s.edit.create {
+				s.form, s.offer = nil, s.edit.unit
+				s = s.selectUnit(s.edit.unit)
+			}
 			s.edit.close()
 			s.edit = nil
 		} else {
@@ -113,6 +118,9 @@ func (s servicesScreen) editUpdate(msg tea.Msg) (_ servicesScreen, _ tea.Cmd, ok
 				s.status, s.edit = "discarded edit of "+s.edit.unit, nil
 				return s, nil, true
 			}
+		}
+		if s.form != nil || s.offer != "" {
+			return s, nil, false
 		}
 		if msg.String() == "E" && s.cursor < len(s.shown()) {
 			unit := s.shown()[s.cursor].Name
@@ -151,15 +159,22 @@ func (s servicesScreen) revert(unit string) tea.Cmd {
 	}
 }
 
-// applyEdit applies content as the edit's file (under the edit's lock) and
-// logs the result, then re-reads the Services.
+// applyEdit applies content as the edit's file, or creates it as a new unit,
+// (under the edit's lock) and logs the result, then re-reads the Services.
 func (s servicesScreen) applyEdit(content []byte) tea.Cmd {
 	e := s.edit
 	return func() tea.Msg {
-		err := service.Apply(s.m.R, e.path, e.unit, content)
-		appendLog(s.m.Root, "service edit "+e.unit, err)
-		list, lerr := service.List(s.m.R)
+		var err error
 		status := "override for " + e.unit + " applied, systemd reloaded"
+		if e.create {
+			err = service.Create(s.m.R, s.m.Root, e.unit, content)
+			appendLog(s.m.Root, "service create "+e.unit, err)
+			status = "created " + e.unit + ", verified and loaded"
+		} else {
+			err = service.Apply(s.m.R, e.path, e.unit, content)
+			appendLog(s.m.Root, "service edit "+e.unit, err)
+		}
+		list, lerr := service.List(s.m.R)
 		if err != nil {
 			status = err.Error() + "\nnothing applied · enter re-edit · esc discard"
 		}
