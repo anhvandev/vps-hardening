@@ -62,6 +62,36 @@ func TestDiskShowsUsageAndCleanups(t *testing.T) {
 	}
 }
 
+// With Docker, dangling images are a cleanup sized from their images; it
+// prunes dangling images only. Without Docker the row is not there.
+func TestDiskPrunesDanglingDockerImages(t *testing.T) {
+	v := ctrlCView(t, openDisk(t, diskHost(t)))
+	if strings.Contains(v, "Docker") {
+		t.Errorf("Docker cleanup without Docker:\n%s", v)
+	}
+
+	h := diskHost(t)
+	h.fake.Results["docker version --format {{.Server.Version}}"] = system.Result{Stdout: "28.1.1\n"}
+	h.fake.Results["docker images -qf dangling=true"] = system.Result{Stdout: "aa11\nbb22\n"}
+	h.fake.Results["docker image inspect --format {{.Size}} aa11 bb22"] = system.Result{Stdout: "1000000000\n2400000000\n"}
+	h.fake.Results["docker image prune -f"] = system.Result{Stdout: "Deleted Images:\ndeleted: sha256:aa11\nTotal reclaimed space: 3.4GB\n"}
+	tm := openDisk(t, h)
+	tm.Type("4")
+	waitFor(t, tm, "Prune dangling Docker images?")
+	tm.Type("y")
+	waitFor(t, tm, "SUMMARY")
+	wantAll(t, ctrlCView(t, tm), "reclaimed up to 3.4 GB")
+	if log := actionLog(t, h); !strings.Contains(log, "disk Prune dangling Docker images: ok") {
+		t.Errorf("Task History:\n%s", log)
+	}
+	wantAll(t, oneOutput(t, h), "$ docker image prune -f", "Total reclaimed space: 3.4GB")
+	for _, c := range h.fake.Calls { // dangling images only: no -a, no containers, volumes or system prune
+		if strings.Contains(c, "prune") && c != "docker image prune -f" {
+			t.Errorf("ran %q", c)
+		}
+	}
+}
+
 // A running scan can be cancelled: du is stopped and the screen says so.
 func TestDiskScanCancel(t *testing.T) {
 	h := diskHost(t)

@@ -44,8 +44,8 @@ func (Exec) Run(name string, args ...string) (Result, error) {
 }
 
 // Streamer starts a long-running command (journalctl -f) and hands back its
-// stdout as it is written; Close stops the command. Runners that can stream
-// implement it next to Run.
+// stdout and stderr as they are written; Close stops the command. Runners
+// that can stream implement it next to Run.
 type Streamer interface {
 	Stream(name string, args ...string) (io.ReadCloser, error)
 }
@@ -53,26 +53,31 @@ type Streamer interface {
 func (Exec) Stream(name string, args ...string) (io.ReadCloser, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	out, err := cmd.StdoutPipe()
+	out, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	cmd.Stdout, cmd.Stderr = w, w // one pipe, so lines keep their order
+	err = cmd.Start()
+	w.Close() // the command holds its own copy; reads end when it exits
+	if err != nil {
+		out.Close()
 		return nil, err
 	}
 	return stream{out, cmd}, nil
 }
 
-// stream is a running command's stdout; Close kills the command and reaps it.
+// stream is a running command's stdout and stderr; Close kills the command
+// and reaps it.
 type stream struct {
-	io.Reader
+	*os.File
 	cmd *exec.Cmd
 }
 
 func (s stream) Close() error {
 	s.cmd.Process.Kill()
 	s.cmd.Wait() // "signal: killed" is the expected outcome, not an error
-	return nil
+	return s.File.Close()
 }
 
 // Fake is a scripted Runner for tests. Results is keyed by the full command
