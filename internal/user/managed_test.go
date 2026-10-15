@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -167,5 +168,164 @@ func TestGenerateKeyCleansUpOnEveryFailure(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// listed is name's row as ManagedUsers shows it; ok is false when gone.
+func listed(t *testing.T, m *Manager, name string) (ManagedUser, bool) {
+	t.Helper()
+	users, err := m.ManagedUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range users {
+		if u.Name == name {
+			return u, true
+		}
+	}
+	return ManagedUser{}, false
+}
+
+// Granting writes vpsctl's NOPASSWD rule, checked by visudo before it is
+// installed; revoking removes that rule only.
+func TestSudoGrantAndRevoke(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("bob", 1001)
+	m := newManager(h, "debian")
+	other := filepath.Join(h.root, "etc/sudoers.d/90-cloud-init-users")
+	os.WriteFile(other, []byte("bob ALL=(ALL) ALL\n"), 0o440)
+
+	if err := m.GrantSudo("bob"); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := listed(t, m, "bob"); !u.Sudo {
+		t.Fatal("bob has no sudo after grant")
+	}
+	if !strings.Contains(strings.Join(h.calls, "\n"), "visudo -cf "+filepath.Join(h.root, "etc/sudoers.d/.vpsctl-")) {
+		t.Fatalf("staged rule not checked by visudo: %q", h.calls)
+	}
+	if err := m.RevokeSudo("bob"); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := listed(t, m, "bob"); u.Sudo {
+		t.Fatal("bob still has sudo after revoke")
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("revoke touched another rule: %v", err)
+	}
+	if err := m.RevokeSudo("bob"); err == nil {
+		t.Fatal("revoked a rule vpsctl never wrote")
+	}
+}
+
+// A rule visudo rejects is never installed.
+func TestSudoGrantRejectedByVisudo(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("bob", 1001)
+	h.fail["visudo"] = true
+	m := newManager(h, "debian")
+	if err := m.GrantSudo("bob"); err == nil {
+		t.Fatal("expected error")
+	}
+	assertEmptyDir(t, filepath.Join(h.root, "etc/sudoers.d"))
+}
+
+// A lock shows in the listing even for a key-only user (no password to
+// lock), and unlock restores the shadow entry exactly.
+func TestLockAndUnlock(t *testing.T) {
+	for _, family := range []string{"debian", "rhel"} {
+		h := newFakeHost(t)
+		h.addUser("bob", 1001)
+		if family == "rhel" {
+			h.shadow["bob"][1] = "!!"
+		}
+		before := strings.Join(h.shadow["bob"], ":")
+		m := newManager(h, family)
+
+		if err := m.Lock("bob"); err != nil {
+			t.Fatal(err)
+		}
+		if u, _ := listed(t, m, "bob"); !u.Locked {
+			t.Fatalf("%s: bob not shown locked: %q", family, h.shadow["bob"])
+		}
+		if err := m.Unlock("bob"); err != nil {
+			t.Fatal(err)
+		}
+		if u, _ := listed(t, m, "bob"); u.Locked {
+			t.Fatalf("%s: bob still locked", family)
+		}
+		if after := strings.Join(h.shadow["bob"], ":"); after != before {
+			t.Fatalf("%s: shadow %q, was %q", family, after, before)
+		}
+	}
+}
+
+// One key is removed by its line; comments and other keys stay.
+func TestRemoveKey(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("bob", os.Getuid())
+	m := newManager(h, "debian")
+	ak := filepath.Join(h.root, "home/bob/.ssh/authorized_keys")
+	os.MkdirAll(filepath.Dir(ak), 0o700)
+	os.WriteFile(ak, []byte("# team keys\n"+laptopKey+"\n\n"+deskKey+"\n"), 0o600)
+
+	keys, err := m.Keys("bob")
+	if err != nil || !slices.Equal(keys, []string{laptopKey, deskKey}) {
+		t.Fatalf("Keys = %q, %v", keys, err)
+	}
+	if err := m.RemoveKey("bob", laptopKey); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(ak); string(b) != "# team keys\n\n"+deskKey+"\n" {
+		t.Fatalf("authorized_keys = %q", b)
+	}
+	if err := m.RemoveKey("bob", laptopKey); err == nil {
+		t.Fatal("removed a key that is not there")
+	}
+}
+
+// Delete keeps the home directory unless asked, and drops vpsctl's sudo rule
+// so a later user of the same name does not inherit it.
+func TestDeleteUser(t *testing.T) {
+	for _, removeHome := range []bool{false, true} {
+		h := newFakeHost(t)
+		h.addUser("bob", 1001)
+		m := newManager(h, "debian")
+		if err := m.GrantSudo("bob"); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.DeleteUser("bob", removeHome); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := listed(t, m, "bob"); ok {
+			t.Fatal("bob still listed")
+		}
+		if _, err := os.Stat(filepath.Join(h.root, "home/bob")); (err == nil) == removeHome {
+			t.Fatalf("removeHome=%v: home stat err %v", removeHome, err)
+		}
+		assertEmptyDir(t, filepath.Join(h.root, "etc/sudoers.d"))
+	}
+}
+
+// Only Managed Users are touched: root, system accounts, unknown and
+// malformed names are refused before anything changes.
+func TestUserActionsRefuseNonManagedUsers(t *testing.T) {
+	for _, name := range []string{"root", "daemon", "nobody", "../etc/x"} {
+		h := newFakeHost(t)
+		h.addUser("root", 0)
+		h.addUser("daemon", 1)
+		m := newManager(h, "debian")
+		for _, do := range []func(string) error{m.GrantSudo, m.RevokeSudo, m.Lock, m.Unlock,
+			func(n string) error { return m.RemoveKey(n, laptopKey) },
+			func(n string) error { return m.DeleteUser(n, true) }} {
+			if err := do(name); err == nil {
+				t.Fatalf("%q: accepted", name)
+			}
+		}
+		for _, c := range h.calls {
+			if !strings.HasPrefix(c, "getent") {
+				t.Fatalf("%q: mutated host: %q", name, h.calls)
+			}
+		}
 	}
 }

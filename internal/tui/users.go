@@ -3,10 +3,12 @@ package tui
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/user"
 )
@@ -16,7 +18,8 @@ func init() { screens["Users"] = newUsers }
 // users lists the Managed Users, read live when opened; the operator's own
 // user (SUDO_USER) is marked. It creates key-only users and adds keys to the
 // selected one, pasted or generated (private key shown raw via rawKeyMachine
-// or written to a mode-600 file).
+// or written to a mode-600 file). It removes one key, toggles sudo and lock,
+// and deletes users, each past the Lockout Guard.
 type users struct {
 	m      *harden.Machine
 	list   []user.ManagedUser
@@ -106,8 +109,82 @@ func (u users) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					})
 				}}
 		}
+	case "x":
+		if ok {
+			return u.askRemoveKey(sel), nil
+		}
+	case "s":
+		switch {
+		case ok && u.list[u.cursor].Sudo:
+			return u, u.guarded("revoke-sudo", sel, "revoked sudo from "+sel, func() error { return u.m.RevokeSudo(sel) })
+		case ok:
+			return u, u.guarded("grant-sudo", sel, "granted sudo to "+sel, func() error { return u.m.GrantSudo(sel) })
+		}
+	case "l":
+		switch {
+		case ok && u.list[u.cursor].Locked:
+			return u, u.guarded("unlock", sel, "unlocked "+sel, func() error { return u.m.Unlock(sel) })
+		case ok:
+			return u, u.guarded("lock", sel, "locked "+sel, func() error { return u.m.Lock(sel) })
+		}
+	case "d":
+		if ok {
+			u.ask = usersAsk{label: "Delete " + sel + ": also remove the home directory? y/N (blank keeps it)",
+				do: func(u users, answer string) (users, tea.Cmd) {
+					rm := strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes")
+					done := "deleted " + sel + ", home kept"
+					if rm {
+						done = "deleted " + sel + " and its home"
+					}
+					return u, u.guarded("delete", sel, done, func() error { return u.m.DeleteUser(sel, rm) })
+				}}
+		}
 	}
 	return u, nil
+}
+
+// askRemoveKey asks which of sel's keys to remove, by number.
+func (u users) askRemoveKey(sel string) users {
+	keys, err := u.m.Keys(sel)
+	switch {
+	case err != nil:
+		u.status = "ERROR: " + err.Error()
+		return u
+	case len(keys) == 0:
+		u.status = sel + " has no keys"
+		return u
+	}
+	label := "Keys of " + sel + ":"
+	for i, k := range keys {
+		if r := []rune(k); len(r) > 64 { // the blob's middle tells keys apart least
+			k = string(r[:20]) + "…" + string(r[len(r)-40:])
+		}
+		label += fmt.Sprintf("\n  %d  %s", i+1, k)
+	}
+	u.ask = usersAsk{label: label + "\nRemove key number", do: func(u users, answer string) (users, tea.Cmd) {
+		n, err := strconv.Atoi(answer)
+		if err != nil || n < 1 || n > len(keys) {
+			u.status = fmt.Sprintf("ERROR: want a key number from 1 to %d", len(keys))
+			return u, nil
+		}
+		return u, u.guarded("remove-key", sel, "removed a key from "+sel, func() error { return u.m.RemoveKey(sel, keys[n-1]) })
+	}}
+	return u
+}
+
+// guarded runs do through mutate as "users VERB NAME" unless the Lockout
+// Guard refuses, deciding on the session user and the users read under the lock.
+func (u users) guarded(verb, name, done string, do func() error) tea.Cmd {
+	return u.mutate("users "+verb+" "+name, done, func() error {
+		list, err := u.m.ManagedUsers()
+		if err != nil {
+			return err
+		}
+		if err := guard.Check(guard.Facts{SessionUser: os.Getenv("SUDO_USER"), Users: list}, guard.UserAction{User: name, Verb: verb}); err != nil {
+			return err
+		}
+		return do()
+	})
 }
 
 // askKey edits the answer; enter runs it, esc cancels.
@@ -184,7 +261,7 @@ func (u users) View() tea.View {
 	case u.job != "":
 		b.WriteString("generating key…")
 	default:
-		b.WriteString(dimStyle.Render("c create · a add key (paste) · g generate key"))
+		b.WriteString(dimStyle.Render("c create · a add key (paste) · g generate key · x remove key · s sudo on/off · l lock/unlock · d delete"))
 	}
 	if u.status != "" {
 		b.WriteString("\n\n" + u.status)

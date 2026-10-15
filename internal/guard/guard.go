@@ -12,6 +12,7 @@ import (
 	"slices"
 
 	"github.com/anhvandev/vpsctl/internal/firewall"
+	"github.com/anhvandev/vpsctl/internal/user"
 )
 
 // Facts is the snapshot of the system the guard decides on. The caller reads
@@ -21,6 +22,10 @@ type Facts struct {
 	Rules   []firewall.Rule // current Firewall Rules
 	// Listening is every tcp Listening Port now; nil = unknown.
 	Listening []int
+	// SessionUser is the login user running vpsctl (SUDO_USER), over SSH or on
+	// the console; "" when root logged in directly.
+	SessionUser string
+	Users       []user.ManagedUser // current Managed Users
 }
 
 // RemoveRule proposes deleting one Firewall Rule.

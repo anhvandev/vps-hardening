@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,12 +15,15 @@ import (
 )
 
 // fakeHost is a stateful Runner: useradd/adduser create users that getent
-// then returns, ssh-keygen writes a key pair. Commands named in fail exit 1.
+// then returns (one or all, with their shadow entries), usermod -L/-U/-e and
+// userdel [-r] change them as the real tools do, ssh-keygen writes a key
+// pair. Commands named in fail exit 1.
 type fakeHost struct {
-	root  string
-	users map[string]string // name -> passwd line
-	fail  map[string]bool
-	calls []string
+	root   string
+	users  map[string]string   // name -> passwd line
+	shadow map[string][]string // name -> shadow fields
+	fail   map[string]bool
+	calls  []string
 }
 
 func newFakeHost(t *testing.T) *fakeHost {
@@ -29,11 +33,12 @@ func newFakeHost(t *testing.T) *fakeHost {
 			t.Fatal(err)
 		}
 	}
-	return &fakeHost{root: root, users: map[string]string{}, fail: map[string]bool{}}
+	return &fakeHost{root: root, users: map[string]string{}, shadow: map[string][]string{}, fail: map[string]bool{}}
 }
 
 func (h *fakeHost) addUser(name string, uid int) {
 	h.users[name] = fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash", name, uid, os.Getgid(), name)
+	h.shadow[name] = strings.Split(name+":!:19000:0:99999:7:::", ":")
 	os.MkdirAll(filepath.Join(h.root, "home", name), 0o755)
 }
 
@@ -44,11 +49,42 @@ func (h *fakeHost) Run(name string, args ...string) (system.Result, error) {
 	}
 	switch name {
 	case "getent":
+		if len(args) == 1 {
+			var out string
+			for _, n := range slices.Sorted(maps.Keys(h.users)) {
+				switch args[0] {
+				case "passwd":
+					out += h.users[n] + "\n"
+				case "shadow":
+					out += strings.Join(h.shadow[n], ":") + "\n"
+				}
+			}
+			return system.Result{Stdout: out}, nil
+		}
 		line, ok := h.users[args[1]]
 		if !ok {
 			return system.Result{Code: 2}, nil
 		}
 		return system.Result{Stdout: line + "\n"}, nil
+	case "usermod":
+		sh := h.shadow[args[len(args)-1]]
+		for i, a := range args {
+			switch {
+			case a == "-L":
+				sh[1] = "!" + sh[1]
+			case a == "-U" && len(sh[1]) > 1: // never unlocks into an empty password
+				sh[1] = strings.TrimPrefix(sh[1], "!")
+			case a == "-e":
+				sh[7] = args[i+1]
+			}
+		}
+	case "userdel":
+		u := args[len(args)-1]
+		if args[0] == "-r" {
+			os.RemoveAll(filepath.Join(h.root, "home", u))
+		}
+		delete(h.users, u)
+		delete(h.shadow, u)
 	case "adduser", "useradd":
 		h.addUser(args[len(args)-1], os.Getuid())
 	case "ssh-keygen":

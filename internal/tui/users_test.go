@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,14 +17,38 @@ import (
 )
 
 // usersSim is a host with Managed User alice: adduser creates users that
-// getent then returns, ssh-keygen writes secretKey and its public half.
+// getent then returns, usermod -L/-U -e expires/unexpires them in shadow,
+// userdel removes them, visudo passes, ssh-keygen writes secretKey and its
+// public half.
 type usersSim struct {
 	*system.Fake
-	passwd []string
+	passwd  []string
+	expired map[string]bool
+}
+
+// addUser adds the Managed User name.
+func (s *usersSim) addUser(name string) {
+	s.passwd = append(s.passwd, fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash", name, os.Getuid(), os.Getgid(), name))
 }
 
 func (s *usersSim) Run(name string, args ...string) (system.Result, error) {
 	switch {
+	case name == "getent" && args[0] == "shadow":
+		var out string
+		for _, l := range s.passwd {
+			u, _, _ := strings.Cut(l, ":")
+			out += u + ":!:19000:0:99999:7::"
+			if s.expired[u] {
+				out += "1"
+			}
+			out += ":\n"
+		}
+		return system.Result{Stdout: out}, nil
+	case name == "usermod":
+		s.expired[args[len(args)-1]] = args[0] == "-L"
+	case name == "userdel":
+		s.passwd = slices.DeleteFunc(s.passwd, func(l string) bool { return strings.HasPrefix(l, args[len(args)-1]+":") })
+	case name == "visudo":
 	case name == "getent" && args[0] == "passwd":
 		var out []string
 		for _, l := range s.passwd {
@@ -36,8 +61,7 @@ func (s *usersSim) Run(name string, args ...string) (system.Result, error) {
 		}
 		return system.Result{Stdout: strings.Join(out, "")}, nil
 	case name == "adduser":
-		u := args[len(args)-1]
-		s.passwd = append(s.passwd, fmt.Sprintf("%s:x:%d:%d::/home/%s:/bin/bash", u, os.Getuid(), os.Getgid(), u))
+		s.addUser(args[len(args)-1])
 	case name == "ssh-keygen":
 		f := args[len(args)-1]
 		os.WriteFile(f, []byte(secretKey), 0o600)
@@ -48,18 +72,19 @@ func (s *usersSim) Run(name string, args ...string) (system.Result, error) {
 	return system.Result{}, nil
 }
 
-// usersScreen opens the Users screen on a host with alice (no keys yet);
-// the private key goes to tty, generated key material under the returned tmp.
-func usersScreen(t *testing.T, tty *fakeTTY) (*testHost, *teatest.TestModel, string) {
+// usersScreen opens the Users screen on a host with alice (no keys yet),
+// after setup; the private key goes to tty, generated key material under the
+// returned tmp.
+func usersScreen(t *testing.T, tty *fakeTTY, setup ...func(*testHost, *usersSim)) (*testHost, *teatest.TestModel, string) {
 	t.Helper()
 	h := debianHost(t)
 	h.fake.Results["getent group"] = system.Result{Stdout: "sudo:x:27:\n"}
-	h.fake.Results["getent shadow"] = system.Result{}
 	h.write("/run/.keep", "")
-	sim := &usersSim{Fake: h.fake, passwd: []string{
-		"root:x:0:0:root:/root:/bin/bash",
-		fmt.Sprintf("alice:x:%d:%d::/home/alice:/bin/bash", os.Getuid(), os.Getgid()),
-	}}
+	sim := &usersSim{Fake: h.fake, passwd: []string{"root:x:0:0:root:/root:/bin/bash"}, expired: map[string]bool{}}
+	sim.addUser("alice")
+	for _, f := range setup {
+		f(h, sim)
+	}
 	m := harden.NewMachine(sim, h.host, h.root, io.Discard)
 	m.TmpDir = t.TempDir()
 	m.OpenTTY = func() (io.ReadWriteCloser, error) { return tty, nil }
@@ -164,6 +189,106 @@ func TestUsersGenerateKeyToFile(t *testing.T) {
 		t.Errorf("key file mode %v", fi.Mode().Perm())
 	}
 	if al := actionLog(t, h); strings.Contains(al, keyFile) {
+		t.Errorf("action log:\n%s", al)
+	}
+}
+
+// withAdmins makes each name a usable Admin User: vpsctl's sudo rule and one key.
+func withAdmins(names ...string) func(*testHost, *usersSim) {
+	return func(h *testHost, s *usersSim) {
+		for _, n := range names {
+			if n != "alice" {
+				s.addUser(n)
+			}
+			h.write("/etc/sudoers.d/99-vpsctl-"+n, n+" ALL=(ALL:ALL) NOPASSWD: ALL\n")
+			h.write("/home/"+n+"/.ssh/authorized_keys", pastedKey+"\n")
+		}
+	}
+}
+
+// The Lockout Guard refuses locking the session's own user; another admin
+// is locked, then unlocked, each logged.
+func TestUsersLockGuardsOwnUser(t *testing.T) {
+	t.Setenv("SUDO_USER", "alice")
+	h, tm, _ := usersScreen(t, nil, withAdmins("alice", "bob"))
+	tm.Type("l")
+	waitFor(t, tm, "refused: alice is your own session's user, cannot lock it")
+	tm.Type("jl")
+	waitFor(t, tm, "locked bob")
+	tm.Type("l")
+	waitFor(t, tm, "unlocked bob")
+	v := ctrlCView(t, tm)
+
+	wantAll(t, v, "alice (you)  yes   1     no", "bob          yes   1     no")
+	al := actionLog(t, h)
+	for _, want := range []string{"users lock alice: failed: refused", "users lock bob: ok", "users unlock bob: ok"} {
+		if !strings.Contains(al, want) {
+			t.Errorf("action log missing %q:\n%s", want, al)
+		}
+	}
+}
+
+// On the console (no session user) the guard still keeps the last usable
+// Admin User: revoking alice's sudo is refused; granting bob's goes through.
+func TestUsersLastAdminKeptOnConsole(t *testing.T) {
+	t.Setenv("SUDO_USER", "")
+	h, tm, _ := usersScreen(t, nil, withAdmins("alice"), func(_ *testHost, s *usersSim) { s.addUser("bob") })
+	tm.Type("s")
+	waitFor(t, tm, "refused: alice is the last usable Admin User")
+	tm.Type("js")
+	waitFor(t, tm, "granted sudo to bob")
+	v := ctrlCView(t, tm)
+
+	wantAll(t, v, "alice        yes   1     no", "bob          yes   0     no")
+	al := actionLog(t, h)
+	if !strings.Contains(al, "users revoke-sudo alice: failed: refused") || !strings.Contains(al, "users grant-sudo bob: ok") {
+		t.Errorf("action log:\n%s", al)
+	}
+}
+
+const deskKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOiYRgOygAvBxXou9+czedWaVm66qdGEpPASTuWPmPjp bob@desk"
+
+// One key is picked by number from the user's keys and removed; the rest stay.
+func TestUsersRemoveOneKey(t *testing.T) {
+	t.Setenv("SUDO_USER", "alice")
+	h, tm, _ := usersScreen(t, nil, withAdmins("alice", "bob"), func(h *testHost, _ *usersSim) {
+		h.write("/home/bob/.ssh/authorized_keys", pastedKey+"\n"+deskKey+"\n")
+	})
+	tm.Type("jx")
+	waitFor(t, tm, "bob@desk")
+	tm.Type("2")
+	enter(tm)
+	waitFor(t, tm, "removed a key from bob")
+	ctrlCView(t, tm)
+
+	if b, _ := os.ReadFile(filepath.Join(h.root, "/home/bob/.ssh/authorized_keys")); string(b) != pastedKey+"\n" {
+		t.Errorf("authorized_keys = %q", b)
+	}
+	if al := actionLog(t, h); !strings.HasSuffix(al, "users remove-key bob: ok\n") || strings.Contains(al, "AAAAC3") {
+		t.Errorf("action log:\n%s", al)
+	}
+}
+
+// Delete asks about the home directory; a blank answer keeps it.
+func TestUsersDeleteKeepsHomeByDefault(t *testing.T) {
+	t.Setenv("SUDO_USER", "alice")
+	h, tm, _ := usersScreen(t, nil, withAdmins("alice", "bob"))
+	tm.Type("jd")
+	waitFor(t, tm, "blank keeps it")
+	enter(tm)
+	waitFor(t, tm, "deleted bob, home kept")
+	v := ctrlCView(t, tm)
+
+	if strings.Contains(v, "bob          ") {
+		t.Errorf("bob still listed:\n%s", v)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "/home/bob/.ssh/authorized_keys")); err != nil {
+		t.Errorf("home not kept: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "/etc/sudoers.d/99-vpsctl-bob")); err == nil {
+		t.Error("bob's sudo rule left behind")
+	}
+	if al := actionLog(t, h); !strings.HasSuffix(al, "users delete bob: ok\n") {
 		t.Errorf("action log:\n%s", al)
 	}
 }
