@@ -1,13 +1,14 @@
 package tui
 
 import (
-	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/anhvandev/vpsctl/internal/harden"
+	"github.com/anhvandev/vpsctl/internal/system"
 )
 
 func init() { screens["Hardening"] = newHardening }
@@ -24,25 +25,24 @@ type hardenField struct {
 // hardening is the Hardening screen. On a machine whose SSH is key-only it
 // is the Hardening Status (hardening_status.go); otherwise the wizard: the
 // inputs of `vpsctl harden`, checked by the same harden.ParseFlags, then
-// harden.Run with the Verify Gate dialog and the private key shown raw
-// outside the TUI (rawKeyMachine) or written to the key file.
+// Hardening as a Task whose steps are the Hardening Steps, with the Verify
+// Gate in its panel and the private key shown raw outside the TUI
+// (rawKeyMachine) or written to the key file.
 type hardening struct {
-	m       *harden.Machine
-	loaded  bool           // the Hardening Status was read
-	steps   []harden.Step  // the Hardening Status
-	rec     *harden.Record // nil without a Hardening Record
-	hst     bool           // the Hardening Status shows, not the wizard
-	table   table
-	w, ht   int
-	fields  []hardenField
-	cursor  int
-	running bool
-	gate    *verifyGate // non-nil while Hardening waits at the Verify Gate
-	status  string      // outcome of the last run, or an input error
+	m      *harden.Machine
+	loaded bool           // the Hardening Status was read
+	steps  []harden.Step  // the Hardening Status
+	rec    *harden.Record // nil without a Hardening Record
+	hst    bool           // the Hardening Status shows, not the wizard
+	table  table
+	w, ht  int
+	fields []hardenField
+	cursor int
+	status string // an input error
 }
 
 func newHardening(m *harden.Machine) tea.Model {
-	return hardening{m: m, table: newTable("STEP", "STATE", ""), fields: []hardenField{
+	return hardening{m: m, table: newTable("STEP", "STATE", "", ""), fields: []hardenField{
 		{label: "Admin user", flag: "--user"},
 		{label: "SSH port (blank = keep current)", flag: "--port"},
 		{label: "Key file, mode 600 (blank = show on screen)", flag: "--key-out"},
@@ -61,8 +61,6 @@ func (h hardening) Init() tea.Cmd {
 	}
 }
 
-func (h hardening) busy() bool { return h.running }
-
 func (h hardening) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hardeningMsg:
@@ -79,35 +77,8 @@ func (h hardening) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if h.hst {
 		return h.statusUpdate(msg)
 	}
-	switch msg := msg.(type) {
-	case gateMsg:
-		if msg.ask != nil {
-			port, _ := h.m.CurrentPort() // Stage A is live: the port to log in on
-			g := newVerifyGate(msg, h.m.Root, port, strings.TrimSpace(h.fields[0].value))
-			h.gate = &g
-			return h, nil
-		}
-		h.running = false
-		switch {
-		case msg.err == nil:
-			h.status = "Hardening complete: password and root login are off. Log under " + harden.LogDir
-		case errors.Is(msg.err, harden.ErrStopped):
-			h.status = "Stopped at the Verify Gate: password auth still enabled, nothing locked; re-run when the new login works"
-		default:
-			h.status = "ERROR: " + msg.err.Error()
-		}
-	case tea.KeyPressMsg:
-		switch {
-		case h.gate != nil:
-			g, cmd := h.gate.Update(msg)
-			if h.gate = &g; cmd != nil {
-				h.gate = nil
-			}
-			return h, cmd
-		case h.running: // stay open for the job's messages
-		default:
-			return h.key(msg)
-		}
+	if k, ok := msg.(tea.KeyPressMsg); ok {
+		return h.key(k)
 	}
 	return h, nil
 }
@@ -137,7 +108,8 @@ func (h hardening) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return h, nil
 }
 
-// start turns the form into `vpsctl harden` arguments and runs them.
+// start turns the form into `vpsctl harden` arguments and runs them as the
+// Hardening Task.
 func (h hardening) start() (tea.Model, tea.Cmd) {
 	var args []string
 	for _, f := range h.fields {
@@ -152,15 +124,19 @@ func (h hardening) start() (tea.Model, tea.Cmd) {
 		h.status = "ERROR: " + err.Error()
 		return h, nil
 	}
-	h.running, h.status = true, ""
-	return h, runGated(h.m.Root, "harden "+strings.Join(args, " "), func(ask func(string) (bool, error), release func() func()) error {
-		logf, err := harden.OpenLog(h.m.Root)
-		if err != nil {
-			return err
-		}
-		defer logf.Close()
-		return harden.Run(o, rawKeyMachine(h.m, release), logf, ask)
-	})
+	h.status = ""
+	port := o.Port // the port to log in on at the Verify Gate
+	if port == 0 {
+		port, _ = h.m.CurrentPort()
+	}
+	var steps []taskStep
+	for _, s := range harden.Steps(o) {
+		steps = append(steps, taskStep{s.Name, func(r system.Runner, out io.Writer) error {
+			return s.Do(rawKeyMachine(taskMachine(h.m, r), taskTerminal(out)), out, taskGate(out, gateCommand(h.m.Root, port, o.User)))
+		}})
+	}
+	summary := fmt.Sprintf("admin %s · ssh :%d · password auth off · root login off", o.User, port)
+	return h, runTask("Hardening", "harden "+strings.Join(args, " "), summary, steps...)
 }
 
 func (h hardening) View() tea.View {
@@ -169,9 +145,6 @@ func (h hardening) View() tea.View {
 		return tea.NewView(titleStyle.Render("Hardening") + "\n\nloading…")
 	case h.hst:
 		return tea.NewView(h.layout().Render())
-	}
-	if h.gate != nil {
-		return tea.NewView(h.gate.View())
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Hardening") + "\n\n")
@@ -191,12 +164,7 @@ func (h hardening) View() tea.View {
 		}
 		fmt.Fprintf(&b, "%s%-44s %s\n", cur, f.label, v)
 	}
-	b.WriteString("\n")
-	if h.running {
-		b.WriteString("hardening…")
-	} else {
-		b.WriteString(dimStyle.Render("↑/↓ move · space toggle · enter run (with the Verify Gate) · esc back"))
-	}
+	b.WriteString("\n" + dimStyle.Render("↑/↓ move · space toggle · enter run (with the Verify Gate) · esc back"))
 	if h.status != "" {
 		b.WriteString("\n\n" + h.status)
 	}

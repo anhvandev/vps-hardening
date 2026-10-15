@@ -114,16 +114,6 @@ func ctrlCView(t *testing.T, tm *teatest.TestModel) string {
 	return ansi.Strip(tm.FinalModel(t, teatest.WithFinalTimeout(3*time.Second)).View().Content)
 }
 
-func hardenLog(t *testing.T, h *testHost) string {
-	t.Helper()
-	logs, _ := filepath.Glob(filepath.Join(h.root, "/var/log/vpsctl/harden-*.log"))
-	if len(logs) != 1 {
-		t.Fatalf("want one Hardening log, got %q", logs)
-	}
-	b, _ := os.ReadFile(logs[0])
-	return string(b)
-}
-
 func TestHardeningWizardHappyPath(t *testing.T) {
 	h, sim, tty, typed := unhardenedHost(t)
 	tm := startWizard(t, h, sim, tty, "alice")
@@ -135,24 +125,32 @@ func TestHardeningWizardHappyPath(t *testing.T) {
 	}, teatest.WithDuration(3*time.Second))
 	io.WriteString(typed, "saved\n")
 
-	waitFor(t, tm, "ssh -p 22 alice@10.0.0.2")
+	// Back in the TUI the Task waits at the Verify Gate in its panel, its
+	// steps the Hardening Steps.
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+		s := ansi.Strip(string(b))
+		return strings.Contains(s, "ssh -p 22 alice@10.0.0.2") && strings.Contains(s, "Task: Hardening") &&
+			strings.Contains(s, "✓ Admin User + key") && strings.Contains(s, "· Default Cloud Users locked")
+	}, teatest.WithDuration(3*time.Second))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyLeft}) // to "Login works"
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitFor(t, tm, "Hardening complete")
-	v := ctrlCView(t, tm) // still in the wizard: the banner is gone without leaving it
+	waitFor(t, tm, "SUMMARY  admin alice · ssh :22 · password auth off · root login off")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // close the result card
+	waitFor(t, tm, "r refresh")                  // the Hardening Status's keys
+	v := ctrlCView(t, tm)
 
-	if strings.Contains(v, "NOT HARDENED") {
-		t.Errorf("banner still shown after Hardening:\n%s", v)
+	if strings.Contains(v, "NOT HARDENED") || !lineHas(v, "Key-only SSH, no root login", "● Done") || !strings.Contains(v, "Admin User alice") {
+		t.Errorf("not the Hardening Status of a hardened host:\n%s", v)
 	}
 	b, _ := os.ReadFile(filepath.Join(h.root, "/home/alice/.ssh/authorized_keys"))
 	if string(b) != "ssh-ed25519 AAAA vpsctl-alice\n" {
 		t.Errorf("authorized_keys = %q", b)
 	}
-	hl, al := hardenLog(t, h), actionLog(t, h)
-	if !strings.Contains(hl, "== SUMMARY ==") || !strings.HasSuffix(al, "harden --user alice: ok\n") {
-		t.Errorf("Hardening log:\n%s\naction log:\n%s", hl, al)
+	out, al := oneOutput(t, h), actionLog(t, h)
+	if !strings.Contains(out, "== VERIFY GATE ==") || !strings.HasSuffix(al, "harden --user alice: ok\n") {
+		t.Errorf("Task output:\n%s\naction log:\n%s", out, al)
 	}
-	for name, s := range map[string]string{"frame": v, "Hardening log": hl, "action log": al} {
+	for name, s := range map[string]string{"frame": v, "Task output": out, "action log": al} {
 		if strings.Contains(s, "SECRETKEYMATERIAL") {
 			t.Errorf("private key in the %s", name)
 		}
@@ -164,7 +162,8 @@ func TestHardeningWizardHappyPath(t *testing.T) {
 func TestHardeningWizardValidatesLikeCLI(t *testing.T) {
 	h, sim, tty, _ := unhardenedHost(t)
 	tm := startWizard(t, h, sim, tty, "root")
-	waitFor(t, tm, `refusing admin user "root"`)
+	waitFor(t, tm, "refusing admin user")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // close the result card
 
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
 	tm.Type("2222")
@@ -180,8 +179,9 @@ func TestHardeningWizardValidatesLikeCLI(t *testing.T) {
 	}
 }
 
-// Stopping at the Verify Gate is the CLI's exit 3: pre-run SSH restored,
-// the banner stays.
+// Stopping at the Verify Gate is the CLI's exit 3: pre-run SSH restored and
+// said so in the result card, the banner stays; the Record keeps what was
+// applied before the gate.
 func TestHardeningWizardStopAtGate(t *testing.T) {
 	h, sim, tty, typed := unhardenedHost(t)
 	dropIn := filepath.Join(h.root, "/etc/ssh/sshd_config.d/00-vpsctl.conf")
@@ -191,15 +191,18 @@ func TestHardeningWizardStopAtGate(t *testing.T) {
 	io.WriteString(typed, "saved\n")
 	waitFor(t, tm, "Stop safely")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // "Stop safely" is the default
-	waitFor(t, tm, "Stopped at the Verify Gate")
+	waitFor(t, tm, "restored pre-run SSH state")
 	v := ctrlCView(t, tm)
 
-	wantAll(t, v, "NOT HARDENED", "password auth still enabled")
+	wantAll(t, v, "NOT HARDENED", "⚠ Stopped", "stopped at the", "(restored pre-run SSH state)")
 	after, _ := os.ReadFile(dropIn)
 	if string(after) != string(before) || sim.listening != 22 {
 		t.Errorf("drop-in %q, listening %d", after, sim.listening)
 	}
 	if al := actionLog(t, h); !strings.Contains(al, "harden --user alice: stopped\n") {
 		t.Errorf("action log:\n%s", al)
+	}
+	if rec, _ := harden.LoadRecord(h.root); rec == nil || rec.Applied["admin"].IsZero() || !rec.Applied["ssh"].IsZero() {
+		t.Errorf("record = %+v", rec)
 	}
 }

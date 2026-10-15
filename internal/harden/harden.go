@@ -109,72 +109,138 @@ var ErrStopped = errors.New("stopped at the Verify Gate")
 // Run hardens h. ask prompts the operator at the Verify Gate (unused with
 // o.Yes); an error from ask (no TTY) aborts. out never sees the private key.
 func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, error)) error {
-	info := func(f string, a ...any) { fmt.Fprintf(out, "[*] "+f+"\n", a...) }
-	warn := func(f string, a ...any) { fmt.Fprintf(out, "[!] "+f+"\n", a...) }
-
-	// The Hardening Record, saved once the run succeeds.
-	rec := Record{Ran: time.Now(), By: cmp.Or(system.SessionUser(), "root"), Admin: o.User, Applied: map[string]time.Time{}}
-	applied := func(ids ...string) {
-		for _, id := range ids {
-			rec.Applied[id] = time.Now()
+	r := newRun(o)
+	for _, s := range r.steps() {
+		if err := s.Do(h, out, ask); err != nil {
+			return err
 		}
 	}
+	for name, skip := range map[string]bool{"fail2ban": o.SkipFail2ban, "updates": o.SkipUpdates, "sysctl": o.SkipSysctl} {
+		if skip {
+			fmt.Fprintf(out, "[!] --skip-%s\n", name)
+		}
+	}
+	fmt.Fprintf(out, "\n== SUMMARY ==\n  admin user : %s (key-only SSH, NOPASSWD sudo)\n  ssh port   : %d\n"+
+		"  password auth, root login: disabled\n  default cloud users: locked\nLost the key? Re-run with --rotate-key.\n",
+		o.User, r.port)
+	return nil
+}
+
+// RunStep is one Hardening Step of a run (see Steps).
+type RunStep struct {
+	Name string
+	Do   func(h Host, out io.Writer, ask func(question string) (bool, error)) error
+}
+
+// Steps are the Hardening Steps of one run with o, skipped ones left out,
+// to run in order on the same h until one fails (as Run does). Each step
+// that succeeds saves the Hardening Record with what is applied so far.
+func Steps(o Options) []RunStep { return newRun(o).steps() }
+
+// run is the state one Hardening run's steps share.
+type run struct {
+	o    Options
+	rec  Record
+	fw   firewall.Backend
+	port int // SSH port after the SSH step
+}
+
+func newRun(o Options) *run {
+	rec := Record{Ran: time.Now(), By: cmp.Or(system.SessionUser(), "root"), Admin: o.User, Applied: map[string]time.Time{}}
 	for id, skip := range map[string]bool{"firewall": o.SkipFirewall, "fail2ban": o.SkipFail2ban, "updates": o.SkipUpdates, "sysctl": o.SkipSysctl} {
 		if skip {
 			rec.Skipped = append(rec.Skipped, id)
 		}
 	}
 	slices.Sort(rec.Skipped)
+	return &run{o: o, rec: rec}
+}
 
-	info("ensuring Admin User %q", o.User)
-	if err := h.EnsureAdmin(o.User); err != nil {
-		return err
+func (r *run) steps() []RunStep {
+	o := r.o
+	// step runs do, then records ids as applied.
+	step := func(name string, do func(h Host, out io.Writer, ask func(string) (bool, error)) error, ids ...string) RunStep {
+		return RunStep{name, func(h Host, out io.Writer, ask func(string) (bool, error)) error {
+			if err := do(h, out, ask); err != nil {
+				return err
+			}
+			r.applied(h, out, ids...)
+			return nil
+		}}
 	}
-	if err := h.InstallKey(o.User, o.KeyOut, o.RotateKey, !o.Yes); err != nil {
-		return err
-	}
-	applied("admin")
-
-	p, err := ChangeSSH(o, h, out, ask)
-	if err != nil {
-		return err
-	}
-	applied("ssh", "port")
-	if !o.SkipFirewall {
-		applied("firewall")
-	}
-
-	info("locking Default Cloud Users")
-	if err := h.LockDefaultCloudUsers(); err != nil {
-		return err
-	}
-	if err := h.BlockCloudInitReinjection(); err != nil {
-		return err
-	}
-	applied("cloud-users", "cloud-init")
-
 	// Extras never undo the SSH hardening already applied: warn and go on.
-	extra := func(skip bool, name string, f func() error) {
+	extra := func(skip bool, name, id string, f func(h Host) error) []RunStep {
 		if skip {
-			warn("--skip-%s", name)
-		} else if err := f(); err != nil {
-			warn("%s: %v (continuing)", name, err)
-		} else {
-			info("%s configured", name)
-			applied(name)
+			return nil
 		}
-	}
-	extra(o.SkipFail2ban, "fail2ban", func() error { return h.Fail2ban(p.Port) })
-	extra(o.SkipUpdates, "updates", h.AutoUpdates)
-	extra(o.SkipSysctl, "sysctl", h.Sysctl)
-	if err := h.SaveRecord(rec); err != nil {
-		warn("Hardening Record not saved: %v", err)
+		return []RunStep{{name, func(h Host, out io.Writer, _ func(string) (bool, error)) error {
+			if err := f(h); err != nil {
+				fmt.Fprintf(out, "[!] %s: %v (continuing)\n", id, err)
+				return nil
+			}
+			fmt.Fprintf(out, "[*] %s configured\n", id)
+			r.applied(h, out, id)
+			return nil
+		}}}
 	}
 
-	fmt.Fprintf(out, "\n== SUMMARY ==\n  admin user : %s (key-only SSH, NOPASSWD sudo)\n  ssh port   : %d\n"+
-		"  password auth, root login: disabled\n  default cloud users: locked\nLost the key? Re-run with --rotate-key.\n",
-		o.User, p.Port)
-	return nil
+	steps := []RunStep{step("Admin User + key", func(h Host, out io.Writer, _ func(string) (bool, error)) error {
+		fmt.Fprintf(out, "[*] ensuring Admin User %q\n", o.User)
+		if err := h.EnsureAdmin(o.User); err != nil {
+			return err
+		}
+		return h.InstallKey(o.User, o.KeyOut, o.RotateKey, !o.Yes)
+	}, "admin")}
+	if !o.SkipFirewall {
+		steps = append(steps, step("Firewall on", func(h Host, out io.Writer, _ func(string) (bool, error)) (err error) {
+			r.fw, err = ensureFirewall(h, out)
+			return err
+		}, "firewall"))
+	}
+	steps = append(steps,
+		step("Key-only SSH, no root login (Verify Gate)", func(h Host, out io.Writer, ask func(string) (bool, error)) error {
+			if o.SkipFirewall {
+				fmt.Fprintln(out, "[!] --skip-firewall: firewall not managed")
+			}
+			p, err := changeSSH(o, r.fw, h, out, ask)
+			r.port = p.Port
+			return err
+		}, "ssh", "port"),
+		step("Default Cloud Users locked", func(h Host, out io.Writer, _ func(string) (bool, error)) error {
+			fmt.Fprintln(out, "[*] locking Default Cloud Users")
+			return h.LockDefaultCloudUsers()
+		}, "cloud-users"),
+		step("cloud-init re-injection block", func(h Host, _ io.Writer, _ func(string) (bool, error)) error {
+			return h.BlockCloudInitReinjection()
+		}, "cloud-init"))
+	steps = append(steps, extra(o.SkipFail2ban, "fail2ban", "fail2ban", func(h Host) error { return h.Fail2ban(r.port) })...)
+	steps = append(steps, extra(o.SkipUpdates, "Automatic security updates", "updates", Host.AutoUpdates)...)
+	return append(steps, extra(o.SkipSysctl, "sysctl hardening", "sysctl", Host.Sysctl)...)
+}
+
+// applied records ids as applied now and saves the Hardening Record.
+func (r *run) applied(h Host, out io.Writer, ids ...string) {
+	for _, id := range ids {
+		r.rec.Applied[id] = time.Now()
+	}
+	if err := h.SaveRecord(r.rec); err != nil {
+		fmt.Fprintf(out, "[!] Hardening Record not saved: %v\n", err)
+	}
+}
+
+// ensureFirewall turns the firewall on, allowing the current SSH port
+// first; nil when the distro has no managed firewall.
+func ensureFirewall(h Host, out io.Writer) (firewall.Backend, error) {
+	cur, err := h.CurrentPort()
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(out, "[*] ensuring firewall (allowing current SSH port %d first)\n", cur)
+	fw, err := h.EnsureFirewall(cur)
+	if err == nil && fw == nil {
+		fmt.Fprintln(out, "[!] no managed firewall for this distro: skipping")
+	}
+	return fw, err
 }
 
 // ChangeSSH is Hardening's SSH part, also run alone by the TUI to change the
@@ -183,25 +249,22 @@ func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, erro
 // mutation restores the snapshot; ErrStopped when the operator stops at the
 // gate. o.Port 0 keeps the current port.
 func ChangeSSH(o Options, h Host, out io.Writer, ask func(question string) (bool, error)) (Plan, error) {
-	info := func(f string, a ...any) { fmt.Fprintf(out, "[*] "+f+"\n", a...) }
-	warn := func(f string, a ...any) { fmt.Fprintf(out, "[!] "+f+"\n", a...) }
-
 	var fw firewall.Backend
 	if o.SkipFirewall {
-		warn("--skip-firewall: firewall not managed")
+		fmt.Fprintln(out, "[!] --skip-firewall: firewall not managed")
 	} else {
-		cur, err := h.CurrentPort()
-		if err != nil {
+		var err error
+		if fw, err = ensureFirewall(h, out); err != nil {
 			return Plan{}, err
-		}
-		info("ensuring firewall (allowing current SSH port %d first)", cur)
-		if fw, err = h.EnsureFirewall(cur); err != nil {
-			return Plan{}, err
-		}
-		if fw == nil {
-			warn("no managed firewall for this distro: skipping")
 		}
 	}
+	return changeSSH(o, fw, h, out, ask)
+}
+
+// changeSSH is ChangeSSH after the firewall step, fw its backend (nil: none).
+func changeSSH(o Options, fw firewall.Backend, h Host, out io.Writer, ask func(question string) (bool, error)) (Plan, error) {
+	info := func(f string, a ...any) { fmt.Fprintf(out, "[*] "+f+"\n", a...) }
+	warn := func(f string, a ...any) { fmt.Fprintf(out, "[!] "+f+"\n", a...) }
 
 	c, p, err := h.BeginSSH(fw, o.Port, o.User)
 	if err != nil {

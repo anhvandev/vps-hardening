@@ -9,8 +9,7 @@
 // where the title is one of menu. Menu entries without a registered screen
 // are hidden. A screen is a plain tea.Model, built fresh each
 // time it is opened (so it reads the live system then). While open it gets
-// every message, including every key except ctrl+c (unless its busy() says a
-// gated job runs), and returns the Back
+// every message, including every key except ctrl+c, and returns the Back
 // command to hand focus back to the menu. Its tea.WindowSizeMsg and mouse
 // messages are in its own cells; screens are built on the shared widgets
 // (widgets.go, which also lists the optional keys/typing methods the shell
@@ -100,7 +99,7 @@ type Model struct {
 	focused  bool      // keys go to screen, not the menu
 	hardened bool
 	newer    NewVersionMsg // newer release tag, "" if none known
-	busyNote bool          // ctrl+c was pressed while a gated job runs
+	busyNote bool          // ctrl+c or q was pressed while a Task runs
 	w, h     int           // terminal size
 	mouseOff bool          // m: mouse capture off, the terminal selects text
 	help     bool          // ?: keymap overlay shown
@@ -195,7 +194,7 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t.task.shown = true
 			return t, nil
 		}
-		if title := t.clicked(msg); title != "" && !t.busy() {
+		if title := t.clicked(msg); title != "" {
 			return t.open(title)
 		}
 		x, y, ok := t.local(msg.X, msg.Y)
@@ -216,32 +215,18 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		t.screen, cmd = t.screen.Update(msg)
 		return t, cmd
-	case gateMsg:
-		if msg.term != nil { // a job takes the real terminal (raw key display)
-			return t, tea.Batch(tea.Exec(msg.term, nil), msg.wait)
-		}
-		if msg.ask == nil { // a job finished: it may have hardened the host
-			t.busyNote = false
-			t.readHardening()
-		}
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
-			// A running gated job is never abandoned (Stage A would stay
-			// without restore): the screen gets ctrl+c instead, which at the
-			// Verify Gate means "Stop safely". A running Task blocks it too.
-			if !t.busy() && !t.running() {
+			// A running Task is never abandoned (Stage A would stay without
+			// restore); at the Verify Gate ctrl+c means "Stop safely".
+			if !t.running() {
 				return t, tea.Quit
 			}
 			t.busyNote = true
-			if t.running() && t.task.gate != nil {
+			if t.task.gate != nil {
 				return t.panelKey("ctrl+c")
 			}
-			if !t.busy() {
-				return t, nil
-			}
-			var cmd tea.Cmd
-			t.screen, cmd = t.screen.Update(msg)
-			return t, cmd
+			return t, nil
 		}
 		if t.task != nil && t.task.shown {
 			return t.panelKey(msg.String())
@@ -273,12 +258,6 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	t.screen, cmd = t.screen.Update(msg)
 	return t, cmd
-}
-
-// busy reports whether the open screen runs a gated job.
-func (t Model) busy() bool {
-	b, ok := t.screen.(interface{ busy() bool })
-	return ok && b.busy()
 }
 
 func (t Model) menuKey(key string) (tea.Model, tea.Cmd) {

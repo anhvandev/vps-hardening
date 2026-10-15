@@ -162,12 +162,27 @@ func TestRunSavesHardeningRecord(t *testing.T) {
 	}
 }
 
-// A run that stops at the Verify Gate hardened nothing: no Record.
-func TestStoppedRunSavesNoRecord(t *testing.T) {
+// A run that stops at the Verify Gate still records what it applied before
+// the gate (the Admin User); the SSH change was restored, so not ssh.
+func TestStoppedRunSavesAppliedSoFar(t *testing.T) {
 	h := newHost()
 	Run(Options{User: "alice"}, h, io.Discard, func(string) (bool, error) { return false, nil })
-	if h.record != nil {
-		t.Errorf("record saved: %+v", h.record)
+	r := h.record
+	if r == nil || r.Admin != "alice" || r.Applied["admin"].IsZero() || !r.Applied["ssh"].IsZero() {
+		t.Errorf("record = %+v", r)
+	}
+}
+
+// Steps are the run's Hardening Steps, without the skipped ones.
+func TestStepsLeaveOutSkipped(t *testing.T) {
+	var names []string
+	for _, s := range Steps(Options{User: "alice", SkipFirewall: true, SkipSysctl: true}) {
+		names = append(names, s.Name)
+	}
+	want := []string{"Admin User + key", "Key-only SSH, no root login (Verify Gate)", "Default Cloud Users locked",
+		"cloud-init re-injection block", "fail2ban", "Automatic security updates"}
+	if !slices.Equal(names, want) {
+		t.Errorf("steps\n got %q\nwant %q", names, want)
 	}
 }
 
