@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -68,6 +69,63 @@ func TestFail2banUnbanWhileLockedShowsHolder(t *testing.T) {
 		if strings.Contains(c, "unbanip") {
 			t.Errorf("unbanned while locked: %q", c)
 		}
+	}
+}
+
+const f2bDropIn = "/etc/fail2ban/jail.d/00-vpsctl.local"
+
+// The operator's SSH session IP (from SSH_CONNECTION of the sudo that started
+// vpsctl) is suggested; saving appends it to the drop-in's ignoreip and reloads.
+func TestFail2banIgnoreSessionIP(t *testing.T) {
+	h := f2bHost(t)
+	h.fake.Results["fail2ban-client reload"] = system.Result{Stdout: "OK\n"}
+	h.write(f2bDropIn, "[DEFAULT]\nignoreip = 10.0.0.0/8\n\n[sshd]\nenabled = true\nport = 22\n")
+	pid := strconv.Itoa(os.Getpid())
+	h.write("/proc/"+pid+"/stat", pid+" (vpsctl) S 4242 4242 4242 0")
+	h.write("/proc/"+pid+"/environ", "SUDO_USER=alice\x00")
+	h.write("/proc/4242/environ", "TERM=xterm\x00SSH_CONNECTION=203.0.113.5 50122 10.0.0.2 22\x00")
+	tm := openFail2ban(h)
+	waitFor(t, tm, "10.0.0.0/8")
+	tm.Type("i")
+	waitFor(t, tm, "203.0.113.5")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "added 203.0.113.5")
+	closeF2b(t, tm)
+	b, _ := os.ReadFile(filepath.Join(h.root, f2bDropIn))
+	if want := "[DEFAULT]\nignoreip = 10.0.0.0/8 203.0.113.5\n\n[sshd]\nenabled = true\nport = 22\n"; string(b) != want {
+		t.Errorf("drop-in =\n%s\nwant\n%s", b, want)
+	}
+	if !slices.Contains(h.fake.Calls, "fail2ban-client reload") {
+		t.Errorf("no reload in %q", h.fake.Calls)
+	}
+	if log := h.actionLog(); !strings.Contains(log, "fail2ban ignore 203.0.113.5: ok") {
+		t.Errorf("action log = %q", log)
+	}
+}
+
+func TestFail2banIgnoreValidatesInput(t *testing.T) {
+	h := f2bHost(t)
+	h.fake.Results["fail2ban-client reload"] = system.Result{Stdout: "OK\n"}
+	h.write(f2bDropIn, "[sshd]\nenabled = true\nport = 22\n")
+	tm := openFail2ban(h)
+	waitFor(t, tm, "198.51.100.7")
+	tm.Type("i")
+	tm.Type("300.1.1.1")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "not an IP or CIDR")
+	if slices.Contains(h.fake.Calls, "fail2ban-client reload") {
+		t.Fatal("reloaded on invalid input")
+	}
+	for range len("300.1.1.1") {
+		tm.Send(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	tm.Type("192.0.2.0/24")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "added 192.0.2.0/24")
+	closeF2b(t, tm)
+	b, _ := os.ReadFile(filepath.Join(h.root, f2bDropIn))
+	if want := "[DEFAULT]\nignoreip = 192.0.2.0/24\n\n[sshd]\nenabled = true\nport = 22\n"; string(b) != want {
+		t.Errorf("drop-in =\n%s\nwant\n%s", b, want)
 	}
 }
 
