@@ -14,9 +14,8 @@
 // messages are in its own cells; screens are built on the shared widgets
 // (widgets.go, which also lists the optional keys/typing methods the shell
 // asks). Every change to the host goes
-// through a Task (task.go) or, on screens not moved yet, logMutation (both:
-// global lock + one action-log line); Lockout Guard checks (internal/guard)
-// run inside them, on facts read under the lock.
+// through a Task (task.go: global lock + one Task History line); Lockout
+// Guard checks (internal/guard) run inside it, on facts read under the lock.
 package tui
 
 import (
