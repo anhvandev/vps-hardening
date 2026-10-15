@@ -20,7 +20,7 @@ const serviceRows = 20
 // default, all with a; / types a name filter. s/x/r/e/d start, stop, restart,
 // enable and disable the selected Service (Protected Units refused); l opens
 // its journal (journal.go); E edits its override in $EDITOR, U reverts it
-// (services_edit.go).
+// (services_edit.go); n opens the new-Service form (services_create.go).
 type servicesScreen struct {
 	m         *harden.Machine
 	loaded    bool
@@ -31,7 +31,9 @@ type servicesScreen struct {
 	filtering bool // typing into the filter
 	cursor    int  // index into shown()
 	status    string
-	edit      *unitEdit // override being edited, nil if none
+	edit      *unitEdit    // override being edited, nil if none
+	form      *serviceForm // new-Service form, nil if closed
+	offer     string       // new unit awaiting the enable+start y/n
 }
 
 // servicesMsg is one read of the Services, plus the outcome of the last action.
@@ -72,6 +74,9 @@ var actionKeys = map[string][2]string{
 
 func (s servicesScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s, cmd, ok := s.editUpdate(msg); ok {
+		return s, cmd
+	}
+	if s, cmd, ok := s.createUpdate(msg); ok {
 		return s, cmd
 	}
 	switch msg := msg.(type) {
@@ -145,6 +150,9 @@ func (s servicesScreen) View() tea.View {
 	if !s.loaded {
 		return tea.NewView(b.String() + "loading…")
 	}
+	if s.form != nil {
+		return tea.NewView(strings.TrimRight(s.form.view()+"\n"+s.status, "\n"))
+	}
 	which := "running/enabled/failed"
 	if s.all {
 		which = "all"
@@ -176,9 +184,12 @@ func (s servicesScreen) View() tea.View {
 			fmt.Fprintf(&b, "%s\n", dimStyle.Render(fmt.Sprintf("%d of %d", s.cursor+1, len(shown))))
 		}
 	}
-	b.WriteString("\n\n" + dimStyle.Render("s start · x stop · r restart · e enable · d disable · l journal · E edit · U revert · a all · / filter") + "\n")
+	b.WriteString("\n\n" + dimStyle.Render("s start · x stop · r restart · e enable · d disable · l journal · E edit · U revert · n new · a all · / filter") + "\n")
 	if s.status != "" {
 		b.WriteString("\n" + s.status)
+	}
+	if s.offer != "" {
+		b.WriteString("\nenable and start " + s.offer + " now? y/n")
 	}
 	return tea.NewView(strings.TrimRight(b.String(), "\n"))
 }
