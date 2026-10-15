@@ -188,6 +188,8 @@ func TestSSHPortChangeWithoutSudoUserAsksLoginUser(t *testing.T) {
 	h.fake.Results["getent passwd"] = system.Result{Stdout: "carol:x:1000:1000::/home/carol:/bin/bash\nalice:x:1001:1001::/home/alice:/bin/bash\n"}
 	h.fake.Results["getent group"] = system.Result{Stdout: "sudo:x:27:carol,alice\n"}
 	h.fake.Results["getent shadow"] = system.Result{Stdout: "carol:!:19000:0:99999:7:::\nalice:!:19000:0:99999:7:::\n"}
+	h.write("/etc/sudoers.d/99-vpsctl-carol", "carol ALL=(ALL:ALL) NOPASSWD: ALL\n")
+	h.write("/etc/sudoers.d/99-vpsctl-alice", "alice ALL=(ALL:ALL) NOPASSWD: ALL\n")
 	tm := changePort(t, h, sim, "2222")
 	waitFor(t, tm, "Login user for the Verify Gate: alice")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})

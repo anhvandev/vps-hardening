@@ -126,7 +126,7 @@ func (u users) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "s":
 		switch {
-		case ok && u.list[u.cursor].Sudo:
+		case ok && u.list[u.cursor].NoPasswd:
 			return u, u.guarded("revoke-sudo", sel, "revoked sudo from "+sel, func() error { return u.m.RevokeSudo(sel) })
 		case ok:
 			return u, u.guarded("grant-sudo", sel, "granted sudo to "+sel, func() error { return u.m.GrantSudo(sel) })

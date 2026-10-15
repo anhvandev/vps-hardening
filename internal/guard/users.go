@@ -28,8 +28,8 @@ func keepOwnUser(f Facts, action any) error {
 }
 
 // keepUsableAdmin refuses turning the last usable Admin User (sudo + key +
-// unlocked) unusable. Revoking removes only vpsctl's rule: an admin-group
-// member keeps sudo.
+// unlocked) unusable. Revoking removes vpsctl's NOPASSWD rule, the only sudo
+// a key-only user can use.
 func keepUsableAdmin(f Facts, action any) error {
 	a, ok := action.(UserAction)
 	if !ok || !slices.Contains(cuts, a.Verb) {
@@ -42,7 +42,7 @@ func keepUsableAdmin(f Facts, action any) error {
 	after := f.Users[i]
 	switch a.Verb {
 	case "revoke-sudo":
-		after.Sudo = after.AdminGroup
+		after.NoPasswd = false
 	case "lock":
 		after.Locked = true
 	case "remove-key":
