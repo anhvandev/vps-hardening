@@ -14,25 +14,43 @@ import (
 
 const cronTail = "journalctl -u cron.service -n 200 --no-pager"
 
-func TestJournalShowsRecentLinesAndScrolls(t *testing.T) {
-	h := svcHost(t)
+// cronJournal scripts 60 lines of cron's journal, more than fit.
+func cronJournal(h *testHost) {
 	var b strings.Builder
-	for i := range 30 {
+	for i := range 60 {
 		fmt.Fprintf(&b, "cron line %02d\n", i)
 	}
 	h.fake.Results[cronTail] = system.Result{Stdout: b.String()}
+}
+
+func TestJournalShowsRecentLinesAndScrolls(t *testing.T) {
+	h := svcHost(t)
+	cronJournal(h)
 
 	v := view(openServicesWith(h, "l")) // first row: cron.service
-	wantAll(t, v, "Journal: cron.service", "cron line 29", "not following")
+	wantAll(t, v, "Journal: cron.service", "cron line 59", "not following", "[ Follow ]")
 	if strings.Contains(v, "cron line 00") {
 		t.Errorf("oldest line shown before scrolling up:\n%s", v)
 	}
 
-	v = view(openServicesWith(h, "lkkkkkkkkkk"))
+	v = view(openServicesWith(h, "l"+strings.Repeat("k", 30)))
 	wantAll(t, v, "cron line 00")
 
 	v = view(keys(openServicesWith(h, "l"), "esc"))
 	wantAll(t, v, "Services", "nginx.service")
+}
+
+// The wheel scrolls the journal, in the shell.
+func TestJournalWheelScrolls(t *testing.T) {
+	h := svcHost(t)
+	cronJournal(h)
+	tm := openServices(t, h)
+	tm.Type("l")
+	waitFor(t, tm, "cron line 59")
+	for range 10 {
+		tm.Send(tea.MouseWheelMsg{X: 60, Y: 10, Button: tea.MouseWheelUp})
+	}
+	wantAll(t, ctrlCView(t, tm), "cron line 00")
 }
 
 // Follow shows lines as the stream writes them, keys still work while it
@@ -51,11 +69,11 @@ func TestJournalFollowStreamsUntilLeft(t *testing.T) {
 	waitFor(t, tm, "cron new line")
 
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape}) // stream idle, TUI not blocked on it
-	waitFor(t, tm, "filter:")
+	waitFor(t, tm, "filter: [")
 	if _, err := pw.Write([]byte("late\n")); !errors.Is(err, io.ErrClosedPipe) {
 		t.Errorf("stream still open after leaving the journal: %v", err)
 	}
-	closeServices(t, tm)
+	ctrlCView(t, tm)
 }
 
 func TestJournalUnreadable(t *testing.T) {

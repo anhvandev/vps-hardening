@@ -163,11 +163,8 @@ func (r *newContainer) Run(name string, args ...string) (system.Result, error) {
 	return r.Fake.Run(name, args...)
 }
 
-// While open, the screen re-reads the containers on its own.
+// While open, the screen re-reads the containers on each refresh tick.
 func TestDockerAutoRefreshes(t *testing.T) {
-	old := autoRefresh
-	autoRefresh = 20 * time.Millisecond
-	t.Cleanup(func() { autoRefresh = old })
 	h := dockerHost(t)
 	r := &newContainer{Fake: h.fake}
 	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
@@ -176,6 +173,7 @@ func TestDockerAutoRefreshes(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "old-api")
 	r.started.Store(true)
+	tm.Send(refreshMsg{})
 	waitFor(t, tm, "cache-1")
 	ctrlCView(t, tm)
 }

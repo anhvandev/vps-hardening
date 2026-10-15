@@ -108,6 +108,7 @@ type Model struct {
 	task     *task         // the running Task, or the ended one until its card is closed
 	refused  string        // why the last Task did not start; cleared once the lock is free
 	holder   string        // who holds the global lock, "" if free (read every tick)
+	refresh  time.Time     // when the open screen last got a refreshMsg (or opened)
 
 	// Hardening badge (readHardening): hardened is SSH key-only; done of
 	// chosen counts the Hardening Steps Done of those not Skipped.
@@ -121,6 +122,14 @@ type tickMsg struct {
 	holder string
 }
 
+// refreshEvery is how often the open screen gets a refreshMsg.
+const refreshEvery = 5 * time.Second
+
+// refreshMsg tells the open screen to re-read the host (auto-refresh: screens
+// that refresh while visible reload on it, others ignore it). The shell sends
+// it every refreshEvery from its clock; tests send it directly.
+type refreshMsg struct{}
+
 func (t Model) tick() tea.Cmd {
 	return tea.Tick(time.Second, func(now time.Time) tea.Msg {
 		return tickMsg{now, actionlog.Holder(filepath.Join(t.m.Root, actionlog.LockPath))}
@@ -133,7 +142,7 @@ func New(m *harden.Machine, now time.Time) Model {
 	ascii.Store(asciiTerm())
 	noDocker.Store(!docker.Installed(m.R))
 	t := Model{m: m, now: now, machine: machineLine(m), cursor: slices.Index(items(), "Overview"),
-		screen: screens["Overview"](m)}
+		screen: screens["Overview"](m), refresh: now}
 	t.readHardening()
 	return t
 }
@@ -147,7 +156,13 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.holder == "" {
 			t.refused = ""
 		}
-		return t, t.tick()
+		if msg.now.Sub(t.refresh) < refreshEvery {
+			return t, t.tick()
+		}
+		t.refresh = msg.now
+		var cmd tea.Cmd
+		t.screen, cmd = t.screen.Update(refreshMsg{})
+		return t, tea.Batch(t.tick(), cmd)
 	case startTaskMsg:
 		return t.startTask(msg)
 	case taskStepMsg, taskLineMsg, taskEndMsg, taskGateMsg, taskTermMsg:
@@ -306,7 +321,7 @@ func (t Model) open(title string) (tea.Model, tea.Cmd) {
 		c.close()
 	}
 	t.cursor = slices.Index(items(), title)
-	t.screen, t.focused, t.overlay, t.help = screens[title](t.m), true, false, false
+	t.screen, t.focused, t.overlay, t.help, t.refresh = screens[title](t.m), true, false, false, t.now
 	t.readHardening()
 	t.screen, _ = t.screen.Update(t.contentSize())
 	return t, t.screen.Init()
