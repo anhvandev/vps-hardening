@@ -82,3 +82,111 @@ func publicKeyLine(s string) (string, error) {
 	}
 	return s, nil
 }
+
+// managed looks name up and refuses anything but an existing Managed User.
+func (m *Manager) managed(name string) (PasswdEntry, error) {
+	if !validName.MatchString(name) {
+		return PasswdEntry{}, fmt.Errorf("invalid user name %q", name)
+	}
+	pw, exists, err := m.Lookup(name)
+	if err != nil {
+		return pw, err
+	}
+	if !exists {
+		return pw, fmt.Errorf("user %q does not exist", name)
+	}
+	if pw.UID < 1000 || pw.UID >= 65534 {
+		return pw, fmt.Errorf("refusing %q: not a Managed User (UID %d)", name, pw.UID)
+	}
+	return pw, nil
+}
+
+// GrantSudo gives name vpsctl's passwordless sudo rule (visudo-checked,
+// installed atomically).
+func (m *Manager) GrantSudo(name string) error {
+	if _, err := m.managed(name); err != nil {
+		return err
+	}
+	return m.writeSudoers(name)
+}
+
+// RevokeSudo removes vpsctl's sudo rule for name; admin-group membership and
+// other sudoers rules are left alone.
+func (m *Manager) RevokeSudo(name string) error {
+	if _, err := m.managed(name); err != nil {
+		return err
+	}
+	err := os.Remove(m.sudoersRule(name))
+	if os.IsNotExist(err) {
+		return fmt.Errorf("%s has no sudo rule from vpsctl (admin-group sudo is not changed here)", name)
+	}
+	return err
+}
+
+func (m *Manager) sudoersRule(name string) string {
+	return filepath.Join(m.Root, "/etc/sudoers.d", "99-vpsctl-"+name)
+}
+
+// Lock suspends name: password locked and account expired, which also stops
+// key logins and shows as Locked even for a key-only user.
+func (m *Manager) Lock(name string) error {
+	if _, err := m.managed(name); err != nil {
+		return err
+	}
+	return m.run("usermod", "-L", "-e", "1", name)
+}
+
+// Unlock reverses Lock exactly: password unlocked, expiry cleared.
+func (m *Manager) Unlock(name string) error {
+	if _, err := m.managed(name); err != nil {
+		return err
+	}
+	return m.run("usermod", "-U", "-e", "", name)
+}
+
+// Keys lists the key lines in name's authorized_keys.
+func (m *Manager) Keys(name string) ([]string, error) {
+	pw, err := m.managed(name)
+	if err != nil {
+		return nil, err
+	}
+	return m.keyLines(pw.Home), nil
+}
+
+// RemoveKey removes the key line key (as Keys returns it) from name's
+// authorized_keys; everything else stays.
+func (m *Manager) RemoveKey(name, key string) error {
+	pw, err := m.managed(name)
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(filepath.Join(m.Root, pw.Home, ".ssh", "authorized_keys"))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	lines := strings.Split(string(b), "\n")
+	kept := slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return strings.TrimSpace(l) == key })
+	if len(kept) == len(lines) {
+		return fmt.Errorf("that key is not in %s's authorized_keys", name)
+	}
+	return m.writeAuthorizedKeys(pw, []byte(strings.Join(kept, "\n")))
+}
+
+// DeleteUser deletes name, its home directory only when removeHome, and
+// vpsctl's sudo rule so a later user of the same name does not inherit it.
+func (m *Manager) DeleteUser(name string, removeHome bool) error {
+	if _, err := m.managed(name); err != nil {
+		return err
+	}
+	args := []string{name}
+	if removeHome {
+		args = []string{"-r", name}
+	}
+	if err := m.run("userdel", args...); err != nil {
+		return err
+	}
+	if err := os.Remove(m.sudoersRule(name)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}

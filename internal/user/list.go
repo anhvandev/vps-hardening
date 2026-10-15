@@ -64,7 +64,7 @@ func (m *Manager) ManagedUsers() ([]ManagedUser, error) {
 			UID:    uid,
 			Home:   f[5],
 			Sudo:   rule == nil || f[3] == adminGID || slices.Contains(admins, name),
-			Keys:   m.countKeys(f[5]),
+			Keys:   len(m.keyLines(f[5])),
 			Locked: noLogin(f[6]) || locked(shadowOf[name]),
 		})
 	}
@@ -89,15 +89,16 @@ func (m *Manager) getent(db string) ([][]string, error) {
 	return rows, nil
 }
 
-func (m *Manager) countKeys(home string) int {
+// keyLines are the keys in home's authorized_keys, one trimmed line each.
+func (m *Manager) keyLines(home string) []string {
 	b, _ := os.ReadFile(filepath.Join(m.Root, home, ".ssh", "authorized_keys"))
-	n := 0
+	var keys []string
 	for _, line := range strings.Split(string(b), "\n") {
 		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
-			n++
+			keys = append(keys, line)
 		}
 	}
-	return n
+	return keys
 }
 
 func noLogin(shell string) bool {
