@@ -115,74 +115,90 @@ func portChangeHost(t *testing.T) (*testHost, *sshSim) {
 	return h, &sshSim{Fake: h.fake, root: h.root, listening: 22, ufw: []string{"ufw allow 22/tcp", "ufw allow 80/tcp"}}
 }
 
-// changePort opens the SSH screen, asks for port and waits at the Verify Gate.
-func changePort(t *testing.T, h *testHost, sim *sshSim, port string) *teatest.TestModel {
+// changePortOn opens the SSH screen on r, types port into the change form
+// and submits it.
+func changePortOn(t *testing.T, h *testHost, r system.Runner, port string) *teatest.TestModel {
 	t.Helper()
-	tm := teatest.NewTestModel(t, New(harden.NewMachine(sim, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
 	waitFor(t, tm, "RAM")
 	tm.Type(menuTo("SSH"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "Active sessions")
-	tm.Type("p" + port)
+	tm.Type("p")
+	waitFor(t, tm, "Change the SSH port")
+	tm.Type(port)
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	return tm
 }
 
+// changePort is changePortOn the port-change simulation.
+func changePort(t *testing.T, h *testHost, sim *sshSim, port string) *teatest.TestModel {
+	t.Helper()
+	return changePortOn(t, h, sim, port)
+}
+
+// The port change runs as a Task: it stops at the Verify Gate inside the
+// Task panel, with the exact login to try, and moves SSH once it works.
 func TestSSHPortChangeThroughVerifyGate(t *testing.T) {
 	h, sim := portChangeHost(t)
 	tm := changePort(t, h, sim, "2222")
 	waitFor(t, tm, "ssh -p 2222 alice@10.0.0.2")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyLeft}) // to "Login works"
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitFor(t, tm, "SSH port changed to 2222")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitFor(t, tm, "q quit")
-	quitView(t, tm)
+	waitFor(t, tm, "SUMMARY  SSH moved to port 2222")
+	v := ctrlCView(t, tm)
+	wantAll(t, v, "Task: Change SSH port to 2222", "Done in")
 	if sim.listening != 2222 || !slices.Equal(sim.ufw, []string{"ufw allow 80/tcp", "ufw allow 2222/tcp"}) {
 		t.Errorf("listening %d, rules %q", sim.listening, sim.ufw)
 	}
-	if log := actionLog(t, h); !strings.Contains(log, "ssh port 2222: started\n") || !strings.HasSuffix(log, "ssh port 2222: ok\n") {
-		t.Errorf("action log:\n%s", log)
+	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.HasSuffix(log, "ssh port 2222: ok\n") {
+		t.Errorf("Task History:\n%s", log)
 	}
+	wantAll(t, oneOutput(t, h), "[step 1/2] Lockout Guard check", "Stage A: SSH on port 2222", "$ systemctl restart ssh", "Done: SSH moved to port 2222")
 }
 
+// "Stop safely" (the default) restores the pre-change state; the card says
+// so and Task History records "stopped".
 func TestSSHPortChangeStopSafelyRestores(t *testing.T) {
 	h, sim := portChangeHost(t)
 	before, _ := os.ReadFile(filepath.Join(h.root, "/etc/ssh/sshd_config.d/00-vpsctl.conf"))
 	tm := changePort(t, h, sim, "2222")
-	waitFor(t, tm, "Stop safely")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // "Stop safely" is the default
+	waitFor(t, tm, "[ Stop safely ]")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "restored pre-run SSH state")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitFor(t, tm, "q quit")
-	quitView(t, tm)
+	v := ctrlCView(t, tm)
+	wantAll(t, v, "Stopped", "SSH stays on port 22")
 	after, _ := os.ReadFile(filepath.Join(h.root, "/etc/ssh/sshd_config.d/00-vpsctl.conf"))
 	if sim.listening != 22 || !slices.Equal(sim.ufw, []string{"ufw allow 22/tcp", "ufw allow 80/tcp"}) || string(after) != string(before) {
 		t.Errorf("listening %d, rules %q, drop-in %q", sim.listening, sim.ufw, after)
 	}
-	if log := actionLog(t, h); !strings.Contains(log, "ssh port 2222: stopped\n") {
-		t.Errorf("action log:\n%s", log)
+	if log := actionLog(t, h); !strings.HasSuffix(log, "ssh port 2222: stopped\n") {
+		t.Errorf("Task History:\n%s", log)
 	}
 }
 
 // On a host that is not hardened (Stage B not live) the port change would
-// apply Stage B without the rest of Hardening: it is refused.
-func TestSSHPortChangeRefusedWhenNotHardened(t *testing.T) {
+// apply Stage B without the rest of Hardening: Change port is disabled, with
+// the reason.
+func TestSSHPortChangeDisabledWhenNotHardened(t *testing.T) {
 	h, sim := portChangeHost(t)
 	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 22\n")
-	tm := changePort(t, h, sim, "2222")
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(sim, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
+	waitFor(t, tm, "RAM")
+	tm.Type(menuTo("SSH"))
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "SSH is not hardened yet")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitFor(t, tm, "q quit")
-	quitView(t, tm)
-	if sim.listening != 22 || len(sim.ufw) != 2 || h.actionLog() != "" {
-		t.Errorf("listening %d, rules %q, action log %q", sim.listening, sim.ufw, h.actionLog())
+	tm.Type("p2222")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	v := ctrlCView(t, tm)
+	if strings.Contains(v, "Change the SSH port") || sim.listening != 22 || len(sim.ufw) != 2 || h.actionLog() != "" {
+		t.Errorf("listening %d, rules %q, Task History %q\n%s", sim.listening, sim.ufw, h.actionLog(), v)
 	}
 }
 
-// Root on the provider console has no SUDO_USER: the port change asks for the
-// login user to try at the Verify Gate, defaulting to the first usable Admin
-// User (carol has no key, alice does).
+// Root on the provider console has no SUDO_USER: the change form also asks
+// the login user to try at the Verify Gate, defaulting to the first usable
+// Admin User (carol has no key, alice does).
 func TestSSHPortChangeWithoutSudoUserAsksLoginUser(t *testing.T) {
 	h, sim := portChangeHost(t)
 	t.Setenv("SUDO_USER", "")
@@ -192,51 +208,47 @@ func TestSSHPortChangeWithoutSudoUserAsksLoginUser(t *testing.T) {
 	h.write("/etc/sudoers.d/99-vpsctl-carol", "carol ALL=(ALL:ALL) NOPASSWD: ALL\n")
 	h.write("/etc/sudoers.d/99-vpsctl-alice", "alice ALL=(ALL:ALL) NOPASSWD: ALL\n")
 	tm := changePort(t, h, sim, "2222")
-	waitFor(t, tm, "Login user for the Verify Gate: alice")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "ssh -p 2222 alice@10.0.0.2")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // Stop safely
 	waitFor(t, tm, "restored pre-run SSH state")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitFor(t, tm, "q quit")
-	quitView(t, tm)
+	ctrlCView(t, tm)
 }
 
 // A login user that is not a Managed User is refused before anything runs.
 func TestSSHPortChangeLoginUserMustBeManaged(t *testing.T) {
 	h, sim := portChangeHost(t)
 	t.Setenv("SUDO_USER", "")
-	tm := changePort(t, h, sim, "2222")
-	waitFor(t, tm, "Login user for the Verify Gate")
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(sim, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
+	waitFor(t, tm, "RAM")
+	tm.Type(menuTo("SSH"))
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "Active sessions")
+	tm.Type("p2222")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
 	for range 10 {
 		tm.Send(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	}
 	tm.Type("mallory")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "not a Managed User")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitFor(t, tm, "q quit")
-	quitView(t, tm)
+	ctrlCView(t, tm)
 	if h.actionLog() != "" {
-		t.Errorf("action log %q", h.actionLog())
+		t.Errorf("Task History %q", h.actionLog())
 	}
 }
 
 var ctrlC = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 
-// ctrl+c at the Verify Gate is "Stop safely": the change is restored and the
-// TUI stays open.
+// ctrl+c at the Verify Gate in the panel is "Stop safely": the change is
+// restored and the TUI stays open.
 func TestCtrlCAtVerifyGateStopsSafely(t *testing.T) {
 	h, sim := portChangeHost(t)
 	tm := changePort(t, h, sim, "2222")
-	waitFor(t, tm, "Stop safely")
+	waitFor(t, tm, "[ Stop safely ]")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyLeft}) // "Login works" selected
 	tm.Send(ctrlC)
 	waitFor(t, tm, "restored pre-run SSH state")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitFor(t, tm, "q quit")
-	quitView(t, tm)
+	ctrlCView(t, tm)
 	if sim.listening != 22 || !slices.Equal(sim.ufw, []string{"ufw allow 22/tcp", "ufw allow 80/tcp"}) {
 		t.Errorf("listening %d, rules %q", sim.listening, sim.ufw)
 	}
@@ -256,42 +268,34 @@ func (b blockOn) Run(name string, args ...string) (system.Result, error) {
 	return b.Runner.Run(name, args...)
 }
 
-// ctrl+c while a gated job runs (before the gate) does not quit: the TUI
-// says it is busy and the job carries on to the Verify Gate.
+// ctrl+c while the change runs (before the gate) does not quit: the TUI
+// says it is busy and the Task carries on to the Verify Gate.
 func TestCtrlCWhileChangeRunsIsIgnored(t *testing.T) {
 	h, sim := portChangeHost(t)
-	r := blockOn{sim, "ss -Hltunp", make(chan struct{})}
-	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
-	waitFor(t, tm, "RAM")
-	tm.Type(menuTo("SSH"))
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitFor(t, tm, "Active sessions")
-	tm.Type("p2222")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitFor(t, tm, "changing the SSH port")
+	r := blockOn{sim, "sshd -t", make(chan struct{})}
+	tm := changePortOn(t, h, r, "2222")
+	waitFor(t, tm, "Stage A: SSH on port 2222")
 	tm.Send(ctrlC)
 	waitFor(t, tm, "busy")
 	close(r.release)
-	waitFor(t, tm, "Stop safely")
+	waitFor(t, tm, "[ Stop safely ]")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "restored pre-run SSH state")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitFor(t, tm, "q quit")
-	quitView(t, tm)
+	ctrlCView(t, tm)
 	if sim.listening != 22 {
 		t.Errorf("listening %d", sim.listening)
 	}
 }
 
+// The Lockout Guard refuses a port something already listens on in the
+// form, before anything runs.
 func TestSSHPortChangeRefusesListeningPort(t *testing.T) {
 	h, sim := portChangeHost(t)
 	h.fake.Results["ss -Hltunp"] = ssOut // postgres on 5432
 	tm := changePort(t, h, sim, "5432")
 	waitFor(t, tm, "refused: port 5432 is already a Listening Port")
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
-	waitFor(t, tm, "q quit")
-	quitView(t, tm)
-	if sim.listening != 22 || len(sim.ufw) != 2 {
-		t.Errorf("listening %d, rules %q", sim.listening, sim.ufw)
+	ctrlCView(t, tm)
+	if sim.listening != 22 || len(sim.ufw) != 2 || h.actionLog() != "" {
+		t.Errorf("listening %d, rules %q, Task History %q", sim.listening, sim.ufw, h.actionLog())
 	}
 }

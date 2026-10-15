@@ -115,11 +115,17 @@ type verifyGate struct {
 // newVerifyGate shows the gate msg waits at, for user logging in on port of
 // the host the operator's own SSH session came in on.
 func newVerifyGate(msg gateMsg, root string, port int, user string) verifyGate {
+	return verifyGate{msg: msg, command: gateCommand(root, port, user)}
+}
+
+// gateCommand is the login to try at the Verify Gate: user on port of the
+// host the operator's own SSH session came in on.
+func gateCommand(root string, port int, user string) string {
 	host := "<this-host>"
 	if f := sshConnection(root); len(f) > 2 {
 		host = f[2]
 	}
-	return verifyGate{msg: msg, command: fmt.Sprintf("ssh -p %d %s@%s", port, user, host)}
+	return fmt.Sprintf("ssh -p %d %s@%s", port, user, host)
 }
 
 // Update moves the selection; enter answers, returning the command that

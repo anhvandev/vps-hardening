@@ -194,6 +194,8 @@ func (t Model) status() (left, right string) {
 		left = "vpsctl " + string(t.newer) + " available: run `sudo vpsctl self-update`"
 	}
 	switch {
+	case t.task != nil && t.task.shown && t.task.gate != nil:
+		right = "←/→ choose · enter confirm · ctrl+c stop safely"
 	case t.task != nil && t.task.shown && t.task.ended:
 		right = "enter close · o output"
 	case t.task != nil && t.task.shown:

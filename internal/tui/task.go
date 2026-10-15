@@ -11,6 +11,7 @@ package tui
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
+	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
 )
 
@@ -57,7 +59,52 @@ type (
 	taskStepMsg int    // this step started
 	taskLineMsg string // one output line
 	taskEndMsg  struct{ err error }
+	taskGateMsg struct { // waits at the Verify Gate for the answer on reply
+		command string
+		reply   chan<- bool
+	}
+	taskTermMsg struct{ lease *termLease } // takes the real terminal
 )
+
+// taskGate is harden's ask (ChangeSSH, Run) for a step of the running Task,
+// out being the step's out: the Task waits at the Verify Gate, shown in its
+// panel with command (see gateCommand) to try from a new terminal, until the
+// operator picks Login works (true) or Stop safely (false, the default; also
+// ctrl+c).
+func taskGate(out io.Writer, command string) func(string) (bool, error) {
+	w := out.(*lineWriter)
+	return func(string) (bool, error) {
+		w.flush()
+		reply := make(chan bool, 1)
+		w.ch <- taskGateMsg{command, reply}
+		return <-reply, nil
+	}
+}
+
+// taskTerminal is the release for rawKeyMachine in a step of the running
+// Task (out is the step's out): the TUI leaves the alternate screen until
+// the returned back is called.
+func taskTerminal(out io.Writer) func() (back func()) {
+	w := out.(*lineWriter)
+	return func() func() {
+		w.flush()
+		l := &termLease{released: make(chan struct{}), done: make(chan struct{})}
+		w.ch <- taskTermMsg{l}
+		<-l.released
+		return func() { close(l.done) }
+	}
+}
+
+// taskMachine is m with every command run through r, a step's runner, so
+// they show in the Task's output.
+func taskMachine(m *harden.Machine, r system.Runner) *harden.Machine {
+	mm, u, s, p := *m, *m.Manager, *m.SSH, *m.Pkgs
+	p.R = r
+	u.R, u.Pkgs = r, &p
+	s.R, s.Pkgs = r, &p
+	mm.Manager, mm.SSH, mm.R, mm.Pkgs = &u, &s, r, &p
+	return &mm
+}
 
 // task is the shell's view of the current Task.
 type task struct {
@@ -70,6 +117,8 @@ type task struct {
 	start, end    time.Time
 	shown         bool // the panel is up (else it lives in the status bar)
 	full          bool // the result card shows the output
+	gate          *taskGateMsg // the Verify Gate waiting for its answer
+	works         bool         // at the gate: "Login works" selected
 	events        <-chan tea.Msg
 }
 
@@ -194,6 +243,10 @@ func (t Model) taskUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		k.cur = int(msg)
 	case taskLineMsg:
 		k.lines = append(k.lines, string(msg))
+	case taskGateMsg:
+		k.gate, k.works, k.shown = &msg, false, true
+	case taskTermMsg:
+		return t, tea.Batch(tea.Exec(msg.lease, nil), k.wait)
 	case taskEndMsg:
 		k.ended, k.err, k.end = true, msg.err, time.Now()
 		t.busyNote, t.hardened = false, t.m.SSH.StageBLive()
@@ -204,10 +257,20 @@ func (t Model) taskUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return t, k.wait
 }
 
-// panelKey: while running enter/esc hide the panel; once ended they close
+// panelKey: at the Verify Gate ←/→ choose, enter answers and ctrl+c stops
+// safely; while running enter/esc hide the panel; once ended they close
 // the result card, and o shows or hides the output.
 func (t Model) panelKey(key string) (tea.Model, tea.Cmd) {
 	switch {
+	case t.task.gate != nil:
+		switch key {
+		case "left", "right", "tab", "h", "l":
+			t.task.works = !t.task.works
+		case "ctrl+c":
+			t = t.panelButton("Stop safely")
+		case "enter":
+			t = t.panelButton(map[bool]string{false: "Stop safely", true: "Login works"}[t.task.works])
+		}
 	case key == "enter" || key == "esc":
 		t = t.panelButton(map[bool]string{false: "Hide", true: "Close"}[t.task.ended])
 	case key == "o" && t.task.ended:
@@ -217,6 +280,13 @@ func (t Model) panelKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (t Model) panelButton(label string) Model {
+	if t.task.gate != nil { // only the gate's answers until it has one
+		if label == "Login works" || label == "Stop safely" {
+			t.task.gate.reply <- label == "Login works"
+			t.task.gate = nil
+		}
+		return t
+	}
 	switch label {
 	case "Hide":
 		t.task.shown = false
@@ -278,6 +348,8 @@ func (t Model) taskStatus() string {
 	switch {
 	case !k.ended:
 		return t.spinner() + " " + k.name + " · " + k.steps[k.cur] + " · " + mmss(t.now.Sub(k.start)) + "   (click to open)"
+	case errors.Is(k.err, harden.ErrStopped):
+		return warnStyle.Render(glyph("⚠")+" "+k.name+": Stopped") + "   (click to open)"
 	case k.err != nil:
 		return errStyle.Render(glyph("✗")+" "+k.name+": Failed") + "   (click to open)"
 	}
@@ -311,11 +383,31 @@ func (t Model) panel(w, h int) []string {
 			}
 			body = append(body, mark+" "+s)
 		}
+		if k.gate != nil {
+			gate := []string{bd.Top + " Verify Gate " + strings.Repeat(bd.Top, max(cw-13, 0))}
+			gate = append(gate, strings.Split(lipgloss.NewStyle().Width(cw).Render(
+				"The change is live. From your computer, in a NEW terminal (keep this session open), log in with:"), "\n")...)
+			works, stop := "[ Login works ]", "[ Stop safely ]"
+			if k.works {
+				works = selectedStyle.Render(works)
+			} else {
+				stop = selectedStyle.Render(stop)
+			}
+			gate = append(gate, "  "+k.gate.command, "then check `sudo true` works. Stop safely restores the pre-change state.",
+				works+"  "+stop+"  "+dimStyle.Render("←/→ choose · enter confirm"))
+			output(h - len(body) - len(gate) - 3)
+			body = append(body, gate...)
+			break
+		}
 		output(h - len(body) - 4)
 		btn := "[ Hide ]  (keeps running in the status bar)"
 		body = append(body, strings.Repeat(" ", max(cw-ansi.StringWidth(btn), 0))+btn)
 	default:
-		if k.err != nil {
+		if errors.Is(k.err, harden.ErrStopped) {
+			state = warnStyle.Render(glyph("⚠") + " Stopped")
+			reason := fmt.Sprintf("step %d/%d %q: %s", k.cur+1, len(k.steps), k.steps[k.cur], k.err)
+			body = append(body, strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")...)
+		} else if k.err != nil {
 			state = errStyle.Render(glyph("✗") + " Failed")
 			reason := fmt.Sprintf("step %d/%d %q: %s", k.cur+1, len(k.steps), k.steps[k.cur], k.err)
 			body = append(body, strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")...)
