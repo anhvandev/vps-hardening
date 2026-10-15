@@ -1,13 +1,13 @@
-// Package tui is the management TUI that `sudo vpsctl` opens: a module menu
-// on the left, the open screen on the right, and a red banner while the host
-// is not hardened.
+// Package tui is the management TUI that `sudo vpsctl` opens: a frame with
+// the machine and its Hardening badge on top, a grouped sidebar on the left,
+// the open screen on the right and a status bar with the keys (frame.go).
 //
 // Adding a screen = one file in this package with a constructor and
 //
 //	func init() { screens["Firewall"] = newFirewall }
 //
 // where the title is one of menu. Menu entries without a registered screen
-// are shown as "coming soon". A screen is a plain tea.Model, built fresh each
+// are hidden. A screen is a plain tea.Model, built fresh each
 // time it is opened (so it reads the live system then). While open it gets
 // every message, including every key except ctrl+c (unless its busy() says a
 // gated job runs), and returns the Back
@@ -17,9 +17,8 @@
 package tui
 
 import (
-	"fmt"
 	"slices"
-	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -27,8 +26,29 @@ import (
 	"github.com/anhvandev/vpsctl/internal/harden"
 )
 
-// menu is the fixed module order; screens fill it in.
-var menu = []string{"Overview", "Hardening", "Firewall", "SSH", "Users", "Services", "Timers", "Cron", "fail2ban", "Action log"}
+// menu is the sidebar: fixed groups of module titles; screens fill it in.
+var menu = []struct {
+	group  string
+	titles []string
+}{
+	{"SECURITY", []string{"Hardening", "Firewall", "SSH", "fail2ban", "Logins"}},
+	{"ACCESS", []string{"Users"}},
+	{"WORKLOADS", []string{"Services", "Timers", "Cron", "Docker"}},
+	{"SYSTEM", []string{"Overview", "Updates", "Disk", "Swap", "Action log"}},
+}
+
+// items is the menu titles that have a screen, in sidebar order.
+func items() []string {
+	var ts []string
+	for _, g := range menu {
+		for _, title := range g.titles {
+			if _, ok := screens[title]; ok {
+				ts = append(ts, title)
+			}
+		}
+	}
+	return ts
+}
 
 // screens maps a menu title to the constructor of its screen.
 var screens = map[string]func(*harden.Machine) tea.Model{}
@@ -42,28 +62,41 @@ func Back() tea.Msg { return backMsg{} }
 // shows a notice and never updates on its own.
 type NewVersionMsg string
 
+// Colors: one accent and the status colors, all from the 16 ANSI colors so
+// they follow the terminal's own palette (light or dark) and 16-color
+// profiles. Yellow (warning, Missing) is warnStyle in ssh.go.
 var (
-	bannerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("1")).Padding(0, 1)
-	titleStyle  = lipgloss.NewStyle().Bold(true)
-	dimStyle    = lipgloss.NewStyle().Faint(true)
-	paneStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	activeColor = lipgloss.Color("6")
+	titleStyle = lipgloss.NewStyle().Bold(true)
+	dimStyle   = lipgloss.NewStyle().Faint(true)
+	accent     = lipgloss.Color("6")
+	okStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green: ok
+	errStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red: error, blocked
+	naStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // grey: n.a.
 )
 
 // Model is the TUI shell. Machine is the real host (or a fake one in tests).
 type Model struct {
 	m        *harden.Machine
-	cursor   int
+	now      time.Time // the clock relative times are measured against
+	machine  string    // header: hostname, distro, size
+	cursor   int       // index into items()
 	screen   tea.Model // open screen, nil if none
 	focused  bool      // keys go to screen, not the menu
 	hardened bool
 	newer    NewVersionMsg // newer release tag, "" if none known
 	busyNote bool          // ctrl+c was pressed while a gated job runs
+	w, h     int           // terminal size
+	mouseOff bool          // m: mouse capture off, the terminal selects text
+	help     bool          // ?: keymap overlay shown
+	overlay  bool          // tab on a narrow terminal: sidebar shown over the content
 }
 
-// New opens the TUI on the Overview, with the menu focused.
-func New(m *harden.Machine) Model {
-	return Model{m: m, screen: screens[menu[0]](m), hardened: m.SSH.StageBLive()}
+// New opens the TUI on the Overview, with the menu focused; now is the
+// current time.
+func New(m *harden.Machine, now time.Time) Model {
+	ascii = asciiTerm()
+	return Model{m: m, now: now, machine: machineLine(m), cursor: slices.Index(items(), "Overview"),
+		screen: screens["Overview"](m), hardened: m.SSH.StageBLive()}
 }
 
 func (t Model) Init() tea.Cmd { return t.screen.Init() }
@@ -77,6 +110,12 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case NewVersionMsg:
 		t.newer = msg
 		return t, nil
+	case tea.WindowSizeMsg:
+		t.w, t.h = msg.Width, msg.Height
+	case tea.MouseClickMsg:
+		if title := t.clicked(msg); title != "" && !t.busy() {
+			return t.open(title)
+		}
 	case gateMsg:
 		if msg.term != nil { // a job takes the real terminal (raw key display)
 			return t, tea.Batch(tea.Exec(msg.term, nil), msg.wait)
@@ -89,13 +128,17 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A running gated job is never abandoned (Stage A would stay
 			// without restore): the screen gets ctrl+c instead, which at the
 			// Verify Gate means "Stop safely".
-			if b, ok := t.screen.(interface{ busy() bool }); !ok || !b.busy() {
+			if !t.busy() {
 				return t, tea.Quit
 			}
 			t.busyNote = true
 			var cmd tea.Cmd
 			t.screen, cmd = t.screen.Update(msg)
 			return t, cmd
+		}
+		if t.help { // any key closes the keymap
+			t.help = false
+			return t, nil
 		}
 		if !t.focused {
 			return t.menuKey(msg.String())
@@ -109,6 +152,12 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return t, cmd
 }
 
+// busy reports whether the open screen runs a gated job.
+func (t Model) busy() bool {
+	b, ok := t.screen.(interface{ busy() bool })
+	return ok && b.busy()
+}
+
 func (t Model) menuKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q":
@@ -116,13 +165,21 @@ func (t Model) menuKey(key string) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		t.cursor = max(t.cursor-1, 0)
 	case "down", "j":
-		t.cursor = min(t.cursor+1, len(menu)-1)
+		t.cursor = min(t.cursor+1, len(items())-1)
 	case "enter":
-		return t.open(menu[t.cursor])
+		return t.open(items()[t.cursor])
 	case "h":
 		if !t.hardened {
 			return t.open("Hardening")
 		}
+	case "?":
+		t.help = true
+	case "m":
+		t.mouseOff = !t.mouseOff
+	case "tab":
+		t.overlay = !t.overlay
+	case "esc":
+		t.overlay = false
 	}
 	return t, nil
 }
@@ -133,63 +190,8 @@ func (t Model) open(title string) (tea.Model, tea.Cmd) {
 	if !ok {
 		return t, nil
 	}
-	t.cursor = slices.Index(menu, title)
-	t.screen, t.focused = newScreen(t.m), true
+	t.cursor = slices.Index(items(), title)
+	t.screen, t.focused, t.overlay, t.help = newScreen(t.m), true, false, false
 	t.hardened = t.m.SSH.StageBLive()
 	return t, t.screen.Init()
-}
-
-func (t Model) View() tea.View {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s  %s\n", titleStyle.Render("vpsctl"), dimStyle.Render(t.m.Host.DistroID+" "+t.m.Host.Version))
-	if !t.hardened {
-		hint := "run `sudo vpsctl harden --user NAME`"
-		if _, ok := screens["Hardening"]; ok {
-			hint = "press h for the Hardening wizard"
-		}
-		b.WriteString(bannerStyle.Render("NOT HARDENED: SSH still allows password or root login; "+hint) + "\n")
-	}
-
-	var items []string
-	for i, title := range menu {
-		line := "  " + title
-		if i == t.cursor {
-			line = "> " + title
-		}
-		switch _, ok := screens[title]; {
-		case !ok:
-			line = dimStyle.Render(line + " (coming soon)")
-		case i == t.cursor:
-			line = lipgloss.NewStyle().Bold(true).Foreground(activeColor).Render(line)
-		}
-		items = append(items, line)
-	}
-	menuPane, screenPane := paneStyle, paneStyle
-	if t.focused {
-		screenPane = screenPane.BorderForeground(activeColor)
-	} else {
-		menuPane = menuPane.BorderForeground(activeColor)
-	}
-	content := ""
-	if t.screen != nil {
-		content = t.screen.View().Content
-	}
-	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
-		menuPane.Render(strings.Join(items, "\n")), screenPane.Render(content)) + "\n")
-
-	help := "↑/↓ move · enter open · q quit"
-	if t.focused {
-		help = "esc back · ctrl+c quit"
-	}
-	if t.busyNote {
-		help = "busy: a change is running and quits only once it ends (ctrl+c at the Verify Gate = Stop safely)"
-	}
-	b.WriteString(dimStyle.Render(help))
-	if t.newer != "" {
-		b.WriteString("\n" + dimStyle.Render("vpsctl "+string(t.newer)+" available: run `sudo vpsctl self-update`"))
-	}
-
-	v := tea.NewView(b.String())
-	v.AltScreen = true
-	return v
 }

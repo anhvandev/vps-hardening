@@ -133,9 +133,7 @@ func TestFail2banIgnoreValidatesInput(t *testing.T) {
 func openFail2ban(h *testHost) *teatest.TestModel {
 	tm := start(h)
 	waitFor(h.t, tm, "RAM")
-	for range slices.Index(menu, "fail2ban") {
-		tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
-	}
+	tm.Type(menuTo("fail2ban"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	return tm
 }

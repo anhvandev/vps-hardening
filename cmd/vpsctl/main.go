@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -61,7 +62,7 @@ func runTUI() int {
 		return 1
 	}
 	m := harden.NewMachine(system.Exec{}, h, "", io.Discard)
-	p := tea.NewProgram(tui.New(m))
+	p := tea.NewProgram(tui.New(m, time.Now()))
 	go func() { // non-blocking; offline or any failure stays silent
 		// ponytail: "newer" means "not the latest tag", no semver ordering; add it if pre-releases ship.
 		if tag, err := release.Latest(release.BaseURL); err == nil && tag != version {

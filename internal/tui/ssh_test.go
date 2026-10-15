@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/exp/teatest/v2"
@@ -39,7 +40,7 @@ func TestSSHScreenFlagsMatchOverrideAndOwnSession(t *testing.T) {
 	h.write("/proc/self/cgroup", "0::/user.slice/user-1000.slice/session-5.scope\n")
 	tm := start(h)
 	waitFor(t, tm, "RAM")
-	tm.Type("jjj") // Overview → Hardening → Firewall → SSH
+	tm.Type(menuTo("SSH"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "198.51.100.7")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -117,9 +118,9 @@ func portChangeHost(t *testing.T) (*testHost, *sshSim) {
 // changePort opens the SSH screen, asks for port and waits at the Verify Gate.
 func changePort(t *testing.T, h *testHost, sim *sshSim, port string) *teatest.TestModel {
 	t.Helper()
-	tm := teatest.NewTestModel(t, New(harden.NewMachine(sim, h.host, h.root, io.Discard)), teatest.WithInitialTermSize(120, 40))
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(sim, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
 	waitFor(t, tm, "RAM")
-	tm.Type("jjj")
+	tm.Type(menuTo("SSH"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "Active sessions")
 	tm.Type("p" + port)
@@ -260,9 +261,9 @@ func (b blockOn) Run(name string, args ...string) (system.Result, error) {
 func TestCtrlCWhileChangeRunsIsIgnored(t *testing.T) {
 	h, sim := portChangeHost(t)
 	r := blockOn{sim, "ss -Hltun", make(chan struct{})}
-	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard)), teatest.WithInitialTermSize(120, 40))
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
 	waitFor(t, tm, "RAM")
-	tm.Type("jjj")
+	tm.Type(menuTo("SSH"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "Active sessions")
 	tm.Type("p2222")

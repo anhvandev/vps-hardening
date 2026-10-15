@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -61,7 +62,7 @@ func (h *testHost) write(p, s string) {
 
 // start opens the TUI on h in a fixed-size virtual terminal.
 func start(h *testHost) *teatest.TestModel {
-	m := New(harden.NewMachine(h.fake, h.host, h.root, io.Discard))
+	m := New(harden.NewMachine(h.fake, h.host, h.root, io.Discard), time.Now())
 	return teatest.NewTestModel(h.t, m, teatest.WithInitialTermSize(120, 40))
 }
 
@@ -146,15 +147,14 @@ func TestOverviewReadsLiveOnEachOpen(t *testing.T) {
 	wantAll(t, v, "443/tcp")
 }
 
-func TestUnbuiltModulesMarkedComingSoon(t *testing.T) {
-	tm := start(debianHost(t))
-	waitFor(t, tm, "RAM")
-	v := quitView(t, tm)
-	for _, title := range menu {
-		if _, built := screens[title]; !built {
-			wantAll(t, v, title+" (coming soon)")
-		}
+// menuTo is the keys that move the sidebar cursor from Overview (where the
+// TUI opens) to title.
+func menuTo(title string) string {
+	n := slices.Index(items(), title) - slices.Index(items(), "Overview")
+	if n < 0 {
+		return strings.Repeat("k", -n)
 	}
+	return strings.Repeat("j", n)
 }
 
 func TestUsersScreenListsManagedUsers(t *testing.T) {
@@ -171,7 +171,7 @@ func TestUsersScreenListsManagedUsers(t *testing.T) {
 
 	tm := start(h)
 	waitFor(t, tm, "RAM")
-	tm.Type("jjjj")
+	tm.Type(menuTo("Users"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "LOCKED")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
