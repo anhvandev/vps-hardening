@@ -90,6 +90,9 @@ func (s sshScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case s.port != 0: // a change is running: stay open for its messages
 		case msg.String() == "esc":
 			return s, Back
+		case msg.String() == "p" && !s.m.SSH.StageBLive():
+			// ChangeSSH would apply Stage B alone, without the rest of Hardening.
+			s.status = "SSH is not hardened yet: run the Hardening wizard (it sets the port too)"
 		case msg.String() == "p":
 			s.editing, s.input, s.status = true, "", ""
 		}

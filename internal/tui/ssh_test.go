@@ -164,6 +164,21 @@ func TestSSHPortChangeStopSafelyRestores(t *testing.T) {
 	}
 }
 
+// On a host that is not hardened (Stage B not live) the port change would
+// apply Stage B without the rest of Hardening: it is refused.
+func TestSSHPortChangeRefusedWhenNotHardened(t *testing.T) {
+	h, sim := portChangeHost(t)
+	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 22\n")
+	tm := changePort(t, h, sim, "2222")
+	waitFor(t, tm, "SSH is not hardened yet")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+	if sim.listening != 22 || len(sim.ufw) != 2 || h.actionLog() != "" {
+		t.Errorf("listening %d, rules %q, action log %q", sim.listening, sim.ufw, h.actionLog())
+	}
+}
+
 var ctrlC = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 
 // ctrl+c at the Verify Gate is "Stop safely": the change is restored and the
