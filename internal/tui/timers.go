@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -133,7 +134,7 @@ func (s timersScreen) create(spec service.TimerSpec) tea.Cmd {
 		status := "created " + unit + ", next run "
 		for _, t := range list {
 			if t.Name == unit {
-				status += or(t.Next, "none")
+				status += cmp.Or(t.Next, "none")
 			}
 		}
 		if err != nil {
@@ -173,7 +174,7 @@ func (s timersScreen) View() tea.View {
 		tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "Timer\tNext run\tService")
 		for _, t := range s.list {
-			fmt.Fprintf(tw, "%s\t%s\t%s\n", t.Name, or(t.Next, "-"), or(t.Service, "-"))
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", t.Name, cmp.Or(t.Next, "-"), cmp.Or(t.Service, "-"))
 		}
 		tw.Flush()
 		lines := strings.Split(table.String(), "\n")

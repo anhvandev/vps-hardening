@@ -80,35 +80,6 @@ func firewallRows(m *harden.Machine) []row {
 	return rows
 }
 
-// firewallRules reads the firewall state ("active", "inactive", "not
-// installed", "not managed on this distro") and its Firewall Rules; err is
-// set whenever the rules could not be listed. ufw lists its rules while
-// inactive; a stopped firewalld cannot.
-func firewallRules(m *harden.Machine) (state string, rules []firewall.Rule, err error) {
-	var res system.Result
-	var active bool
-	switch m.Host.Family {
-	case "debian":
-		res, err = m.R.Run("ufw", "status")
-		active = res.Code == 0 && strings.Contains(res.Stdout, "Status: active")
-	case "rhel":
-		res, err = m.R.Run("firewall-cmd", "--state")
-		active = res.Code == 0
-	default:
-		return "not managed on this distro", nil, firewall.ErrNoBackend
-	}
-	if err != nil {
-		return "not installed", nil, err
-	}
-	state = "inactive"
-	if active {
-		state = "active"
-	}
-	fw, _ := firewall.New(m.Host, m.R, m.Pkgs)
-	rules, err = fw.List()
-	return state, rules, err
-}
-
 func ruleRows(rules []firewall.Rule) []row {
 	if len(rules) == 0 {
 		return []row{{"", "  no rules"}}

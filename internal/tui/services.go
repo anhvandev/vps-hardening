@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 	"text/tabwriter"
@@ -135,7 +136,7 @@ func (s servicesScreen) act(verb, done, unit string) tea.Cmd {
 		}
 		for _, svc := range list {
 			if err == nil && svc.Name == unit {
-				status += ": " + state(svc) + ", " + or(svc.Enabled, "no unit file")
+				status += ": " + state(svc) + ", " + cmp.Or(svc.Enabled, "no unit file")
 			}
 		}
 		return servicesMsg{list, lerr, status}
@@ -174,7 +175,7 @@ func (s servicesScreen) View() tea.View {
 		tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "Service\tState\tEnabled\tDescription")
 		for _, svc := range shown[first:min(first+serviceRows, len(shown))] {
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", svc.Name, state(svc), or(svc.Enabled, "-"), svc.Description)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", svc.Name, state(svc), cmp.Or(svc.Enabled, "-"), svc.Description)
 		}
 		tw.Flush()
 		lines := strings.Split(table.String(), "\n")

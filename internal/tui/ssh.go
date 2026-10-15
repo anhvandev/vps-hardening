@@ -160,7 +160,7 @@ func (s sshScreen) changePort(port int, user string) tea.Cmd {
 			return err
 		}
 		var listening []int // nil when ss failed
-		for _, l := range listeners(s.m.R) {
+		for _, l := range listeningPorts(s.m.R) {
 			if l.proto == "tcp" {
 				listening = append(listening, l.port)
 			}

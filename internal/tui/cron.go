@@ -1,12 +1,10 @@
 package tui
 
 import (
-	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/cron"
 	"github.com/anhvandev/vpsctl/internal/harden"
 )
@@ -139,17 +137,12 @@ func (c cronScreen) save(verb, user, old, new string) tea.Cmd {
 		old = ""
 	}
 	return func() tea.Msg {
-		lk, err := actionlog.Lock(filepath.Join(c.m.Root, actionlog.LockPath))
-		if err != nil {
-			return cronSavedMsg{err}
-		}
-		defer lk.Close()
-		err = cron.Replace(c.m.R, user, old, new)
-		result := "ok"
-		if err != nil {
-			result = "failed"
-		}
-		actionlog.Append(filepath.Join(c.m.Root, actionlog.LogPath), "cron "+verb+" "+user, result) // failures to log are ignored
+		err := logMutation(c.m.Root, "cron "+verb+" "+user, func() error {
+			if err := cron.Replace(c.m.R, user, old, new); err != nil {
+				return quiet{err}
+			}
+			return nil
+		})
 		return cronSavedMsg{err}
 	}
 }

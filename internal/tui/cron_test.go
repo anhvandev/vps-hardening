@@ -160,6 +160,29 @@ func TestCronRejectsInvalidSchedule(t *testing.T) {
 	}
 }
 
+// rejectInstall is a crontab that refuses every install, echoing the file.
+type rejectInstall struct{ crontabHost }
+
+func (r rejectInstall) Run(name string, args ...string) (system.Result, error) {
+	if name == "crontab" && len(args) == 3 && args[2] != "-l" {
+		b, _ := os.ReadFile(args[2])
+		return system.Result{Code: 1, Stderr: "bad line: " + string(b)}, nil
+	}
+	return r.crontabHost.Run(name, args...)
+}
+
+// A failed save shows the error but logs a bare "failed": the error may echo
+// a Cron Entry's secrets.
+func TestCronFailedSaveKeepsEntryOutOfLog(t *testing.T) {
+	h, c := cronHost(t)
+	s := screens["Cron"](harden.NewMachine(rejectInstall{c}, h.host, h.root, io.Discard))
+	s = keys(pump(s, s.Init()()), "a", "@daily curl -H TOKEN=hunter2 x", "enter")
+	wantAll(t, view(s), "bad line")
+	if log := actionLog(t, h); strings.Contains(log, "hunter2") || !strings.HasSuffix(log, "cron add root: failed\n") {
+		t.Errorf("action log:\n%s", log)
+	}
+}
+
 func TestCronLockBusy(t *testing.T) {
 	h, c := cronHost(t)
 	lk, err := actionlog.Lock(filepath.Join(h.root, actionlog.LockPath))
