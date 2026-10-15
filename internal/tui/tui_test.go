@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/teatest/v2"
 
@@ -37,7 +38,7 @@ func debianHost(t *testing.T) *testHost {
 				"ufw allow 22/tcp\nufw allow 80/tcp\nufw allow from 10.0.0.0/8 to any port 5432 proto tcp\n"},
 			"fail2ban-client status": {Stdout: "Status\n|- Number of jail:\t1\n`- Jail list:\tsshd\n"},
 			"systemctl show -p LastTriggerUSec --value apt-daily-upgrade.timer": {Stdout: "Wed 2026-10-14 06:12:03 UTC\n"},
-			"apt-get -s -o Debug::NoLocking=true upgrade": {Stdout: "Reading package lists...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"},
+			"apt-get -s -o Debug::NoLocking=true upgrade":                       {Stdout: "Reading package lists...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"},
 			"df -h -P /": {Stdout: "Filesystem      Size  Used Avail Capacity Mounted on\n/dev/vda1        20G  4.1G   15G      22% /\n"},
 		}},
 	}
@@ -102,4 +103,81 @@ func TestOverviewOnHardenedHost(t *testing.T) {
 	if strings.Contains(strings.ToLower(v), "not hardened") {
 		t.Errorf("hardened host shows the banner:\n%s", v)
 	}
+}
+
+func TestBannerOnUnhardenedHost(t *testing.T) {
+	h := debianHost(t)
+	// Stage A only: the port is ours, auth hardening is not live yet.
+	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 2222\n")
+	tm := start(h)
+	waitFor(t, tm, "5432/tcp")
+	v := quitView(t, tm)
+	wantAll(t, v, "NOT HARDENED", "Overview", "22/tcp")
+}
+
+func TestQuit(t *testing.T) {
+	tm := start(debianHost(t))
+	waitFor(t, tm, "Overview")
+	tm.Type("q")
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+}
+
+func TestOverviewShowsMissingPiecesAsState(t *testing.T) {
+	h := debianHost(t)
+	h.fake.Results["ufw status"] = system.Result{Stdout: "Status: inactive\n"}
+	delete(h.fake.Results, "fail2ban-client status") // not installed
+	tm := start(h)
+	waitFor(t, tm, "RAM")
+	v := quitView(t, tm)
+	wantAll(t, v, "Firewall   inactive", "80/tcp", "fail2ban   not installed")
+}
+
+// Reopening the Overview reads the host again: a rule added by hand shows up.
+func TestOverviewReadsLiveOnEachOpen(t *testing.T) {
+	h := debianHost(t)
+	tm := start(h)
+	waitFor(t, tm, "5432/tcp")
+	h.fake.Results["ufw show added"] = system.Result{Stdout: "ufw allow 22/tcp\nufw allow 443/tcp\n"}
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // reopen the Overview
+	waitFor(t, tm, "443/tcp")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape}) // back to the menu
+	waitFor(t, tm, "q quit")
+	v := quitView(t, tm)
+	wantAll(t, v, "443/tcp")
+}
+
+func TestUnbuiltModulesMarkedComingSoon(t *testing.T) {
+	tm := start(debianHost(t))
+	waitFor(t, tm, "RAM")
+	v := quitView(t, tm)
+	for _, title := range menu {
+		if _, built := screens[title]; !built {
+			wantAll(t, v, title+" (coming soon)")
+		}
+	}
+}
+
+func TestOverviewOnRhelHost(t *testing.T) {
+	h := &testHost{t: t, root: t.TempDir(),
+		host: system.Host{DistroID: "rocky", Version: "9.4", Family: "rhel", Supported: true,
+			SSHUnit: "sshd", AdminGroup: "wheel", PkgManager: "dnf"},
+		fake: &system.Fake{Results: map[string]system.Result{
+			"firewall-cmd --state":                                          {Stdout: "running\n"},
+			"firewall-cmd --permanent --list-ports":                         {Stdout: "8080/tcp 6000-6100/udp\n"},
+			"firewall-cmd --permanent --list-services":                      {Stdout: "ssh dhcpv6-client\n"},
+			"firewall-cmd --permanent --list-rich-rules":                    {},
+			"fail2ban-client status":                                        {Code: 255, Stderr: "Failed to access socket path"},
+			"systemctl show -p LastTriggerUSec --value dnf-automatic.timer": {Stdout: "n/a\n"},
+			"dnf -q -C check-update":                                        {Code: 100, Stdout: "\nkernel.x86_64   5.14.0-503   baseos\nopenssl.x86_64  3.2.2-6   baseos\n"},
+			"needs-restarting -r":                                           {Code: 1, Stdout: "Reboot is required\n"},
+			"df -h -P /":                                                    {Stdout: "Filesystem Size Used Avail Capacity Mounted on\n/dev/sda1 50G 10G 40G 20% /\n"},
+		}},
+	}
+	h.write("/proc/meminfo", "MemTotal: 2097152 kB\nMemAvailable: 1048576 kB\n")
+	tm := start(h)
+	waitFor(t, tm, "RAM")
+	v := quitView(t, tm)
+	wantAll(t, v, "Firewall   active", "8080/tcp", "6000-6100/udp", "22/tcp",
+		"fail2ban   inactive", "last run never · 2 pending · REBOOT REQUIRED",
+		"10G used of 50G (20%)", "1.0 GiB used of 2.0 GiB", "NOT HARDENED")
 }
