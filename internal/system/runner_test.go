@@ -69,6 +69,19 @@ func TestExecStreamReadsUntilClosed(t *testing.T) {
 	}
 }
 
+// A stream carries stderr too: docker logs writes a container's stderr there.
+func TestExecStreamIncludesStderr(t *testing.T) {
+	rc, err := Exec{}.Stream("sh", "-c", "echo out; echo err >&2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(rc)
+	rc.Close()
+	if err != nil || string(b) != "out\nerr\n" {
+		t.Errorf("read %q, %v", b, err)
+	}
+}
+
 func TestFakeStreamReturnsScriptedReader(t *testing.T) {
 	f := &Fake{Streams: map[string]io.ReadCloser{"journalctl -f": io.NopCloser(strings.NewReader("a\n"))}}
 	rc, err := f.Stream("journalctl", "-f")

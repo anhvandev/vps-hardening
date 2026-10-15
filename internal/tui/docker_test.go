@@ -4,10 +4,13 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
@@ -115,4 +118,97 @@ func TestDockerMenuItemOnlyWithDocker(t *testing.T) {
 	waitFor(t, tm, "RAM")
 	v = quitView(t, tm)
 	wantAll(t, v, "│   Docker ", "Docker     3 containers · ⚠ 1 Published Port bypassing the firewall")
+}
+
+// openDocker starts the TUI on h and focuses the loaded Docker screen.
+func openDocker(t *testing.T, h *testHost) *teatest.TestModel {
+	t.Helper()
+	h.write("/run/.keep", "") // the lock lives under /run
+	tm := start(h)
+	waitFor(t, tm, "RAM")
+	tm.Type(menuTo("Docker"))
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "CONTAINER")
+	return tm
+}
+
+// Restart asks, then runs as a Task recorded in Task History.
+func TestDockerRestartRunsAsTask(t *testing.T) {
+	h := dockerHost(t)
+	h.fake.Results["docker restart shop-web-1"] = system.Result{Stdout: "shop-web-1\n"}
+	tm := openDocker(t, h)
+	tm.Type("j") // shop-web-1
+	tm.Type("R")
+	waitFor(t, tm, "Restart shop-web-1?")
+	tm.Type("y")
+	waitFor(t, tm, "SUMMARY")
+	v := ctrlCView(t, tm)
+	wantAll(t, v, "Task: Restart shop-web-1", "Done in")
+	if log := actionLog(t, h); !strings.Contains(log, "docker restart shop-web-1: ok") {
+		t.Errorf("Task History:\n%s", log)
+	}
+	wantAll(t, oneOutput(t, h), "$ docker restart shop-web-1")
+}
+
+// newContainer is a Docker host where a container appears once started is set.
+type newContainer struct {
+	*system.Fake
+	started atomic.Bool
+}
+
+func (r *newContainer) Run(name string, args ...string) (system.Result, error) {
+	if r.started.Load() && strings.Join(append([]string{name}, args...), " ") == dockerPs {
+		return system.Result{Stdout: "c3\tcache-1\tredis:7\trunning\tUp 1 second\t\t\n"}, nil
+	}
+	return r.Fake.Run(name, args...)
+}
+
+// While open, the screen re-reads the containers on its own.
+func TestDockerAutoRefreshes(t *testing.T) {
+	old := autoRefresh
+	autoRefresh = 20 * time.Millisecond
+	t.Cleanup(func() { autoRefresh = old })
+	h := dockerHost(t)
+	r := &newContainer{Fake: h.fake}
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
+	waitFor(t, tm, "RAM")
+	tm.Type(menuTo("Docker"))
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "old-api")
+	r.started.Store(true)
+	waitFor(t, tm, "cache-1")
+	ctrlCView(t, tm)
+}
+
+// Logs follow the container live; leaving the logs view, by esc or through
+// the sidebar, stops docker logs.
+func TestDockerLogsFollow(t *testing.T) {
+	for _, leave := range []string{"esc", "sidebar"} {
+		t.Run(leave, func(t *testing.T) {
+			h := dockerHost(t)
+			logs, w := io.Pipe()
+			h.fake.Streams = map[string]io.ReadCloser{"docker logs -f --tail 200 shop-web-1": logs}
+			tm := openDocker(t, h)
+			tm.Type("j") // shop-web-1
+			tm.Type("l")
+			waitFor(t, tm, "Logs: shop-web-1")
+			io.WriteString(w, "GET / 200\n")
+			waitFor(t, tm, "GET / 200")
+			io.WriteString(w, "POST /login 500\n")
+			waitFor(t, tm, "POST /login 500")
+			if leave == "esc" {
+				tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+				waitFor(t, tm, "CONTAINER")
+			} else {
+				tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
+				tm.Type(strings.Repeat("j", slices.Index(items(), "Overview")-slices.Index(items(), "Docker")))
+				tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+				waitFor(t, tm, "RAM")
+			}
+			ctrlCView(t, tm)
+			if _, err := io.WriteString(w, "late\n"); err == nil {
+				t.Error("docker logs still running after leaving")
+			}
+		})
+	}
 }

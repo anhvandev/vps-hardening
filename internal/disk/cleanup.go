@@ -111,6 +111,34 @@ func OldKernels(r system.Runner, pkgMgr string) Cleanup {
 	return c
 }
 
+// DanglingImages prunes Docker's dangling images (untagged, unused) and
+// nothing else: no tagged image, container, volume or network. Reclaimable
+// sums their sizes, overcounting layers they share.
+func DanglingImages(r system.Runner) Cleanup {
+	c := Cleanup{Name: "Prune dangling Docker images"}
+	out, err := run(r, "docker", "images", "-qf", "dangling=true")
+	if err != nil {
+		c.Why = "Docker not reachable"
+		return c
+	}
+	if ids := strings.Fields(out); len(ids) > 0 {
+		sizes, err := run(r, "docker", append([]string{"image", "inspect", "--format", "{{.Size}}"}, ids...)...)
+		if err != nil {
+			c.Why = "image sizes unknown"
+			return c
+		}
+		for _, s := range strings.Fields(sizes) {
+			n, _ := strconv.ParseInt(s, 10, 64)
+			c.Reclaimable += n
+		}
+	}
+	c.Run = func(r system.Runner) error {
+		_, err := run(r, "docker", "image", "prune", "-f") // never -a: that removes unused tagged images too
+		return err
+	}
+	return c
+}
+
 // kernel is one installed kernel version and the packages that belong to it.
 type kernel struct {
 	version string

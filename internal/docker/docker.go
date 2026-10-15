@@ -4,6 +4,9 @@ package docker
 
 import (
 	"errors"
+	"fmt"
+	"io"
+	"strconv"
 	"strings"
 
 	"github.com/anhvandev/vpsctl/internal/system"
@@ -55,6 +58,26 @@ func Containers(r system.Runner) ([]Container, error) {
 		cs = append(cs, c)
 	}
 	return cs, nil
+}
+
+// Do runs verb (start, stop or restart) on the container named name.
+func Do(r system.Runner, verb, name string) error {
+	res, err := r.Run("docker", verb, name)
+	if err == nil && res.Code != 0 {
+		err = fmt.Errorf("docker %s %s: exit %d: %s", verb, name, res.Code, strings.TrimSpace(res.Stderr))
+	}
+	return err
+}
+
+// Logs follows the logs (stdout and stderr) of the container named name,
+// starting from its last n lines, until the returned stream is closed
+// (which stops docker logs).
+func Logs(r system.Runner, name string, n int) (io.ReadCloser, error) {
+	s, ok := r.(system.Streamer)
+	if !ok {
+		return nil, errors.New("live follow not supported by this runner")
+	}
+	return s.Stream("docker", "logs", "-f", "--tail", strconv.Itoa(n), name)
 }
 
 // parsePort reads "[hostIP:]hostPort->port/proto" or "port/proto". The host

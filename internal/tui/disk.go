@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/anhvandev/vpsctl/internal/disk"
+	"github.com/anhvandev/vpsctl/internal/docker"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
 )
@@ -26,11 +27,15 @@ const (
 // cleanups are the Cleanup rows, in order; key N runs row N. Add a cleanup
 // by appending it here (disk.Cleanup: name, reclaimable bytes, Run).
 func cleanups(m *harden.Machine) []disk.Cleanup {
-	return []disk.Cleanup{
+	cs := []disk.Cleanup{
 		disk.Journal(m.R, journalKeepMB),
 		disk.PackageCache(m.R, m.Root, m.Host.PkgManager),
 		disk.OldKernels(m.R, m.Host.PkgManager),
 	}
+	if docker.Installed(m.R) {
+		cs = append(cs, disk.DanglingImages(m.R))
+	}
+	return cs
 }
 
 // diskScreen shows usage per filesystem, the largest directories under the

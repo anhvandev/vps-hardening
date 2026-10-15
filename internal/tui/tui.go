@@ -302,6 +302,9 @@ func (t Model) open(title string) (tea.Model, tea.Cmd) {
 	if !shown(title) {
 		return t, nil
 	}
+	if c, ok := t.screen.(interface{ close() }); ok { // e.g. stop following logs
+		c.close()
+	}
 	t.cursor = slices.Index(items(), title)
 	t.screen, t.focused, t.overlay, t.help = screens[title](t.m), true, false, false
 	t.readHardening()

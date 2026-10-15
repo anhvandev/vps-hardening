@@ -4,9 +4,11 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -24,31 +26,51 @@ var noDocker atomic.Bool
 
 // dockerScreen lists the containers read live, grouped by compose project
 // (plain containers last), with their Published Ports; ports bound to all
-// interfaces are flagged ⚠ with how to fix them. Read-only: vpsctl never
-// edits Docker's firewall rules.
+// interfaces are flagged ⚠ with how to fix them. s/x/R start, stop and
+// restart the selected container as a Task after a confirm; l follows its
+// logs. Re-read every autoRefresh while open. vpsctl never edits Docker's
+// firewall rules.
 type dockerScreen struct {
 	m      *harden.Machine
+	id     *byte // this screen's refresh chain (a reopened screen starts another)
 	loaded bool
 	list   []docker.Container
 	err    error // docker not reachable
 	table  table
 	want   string // container to select once loaded (opened from a link)
+	asking bool
+	ask    confirm
+	verb   [2]string // the dockerVerbs entry asked about
+	target string    // the container asked about (a refresh may move the selection)
 	w, h   int
 }
 
+// dockerVerbs maps a key to its docker verb and what to say once done.
+var dockerVerbs = map[string][2]string{"s": {"start", "started"}, "x": {"stop", "stopped"}, "R": {"restart", "restarted"}}
+
+// dockerMsg is a read of the containers; chain is the screen whose refresh
+// chain asked for it (nil for a one-off reload).
 type dockerMsg struct {
-	list []docker.Container
-	err  error
+	list  []docker.Container
+	err   error
+	chain *byte
 }
+
+// dockerTickMsg is time for chain's next refresh.
+type dockerTickMsg struct{ chain *byte }
 
 // openMsg asks the shell to open the screen title on its item.
 type openMsg struct{ title, item string }
 
 func newDocker(m *harden.Machine) tea.Model {
-	return dockerScreen{m: m, table: newTable("CONTAINER", "PROJECT", "STATE", "PORTS", "IMAGE")}
+	return dockerScreen{m: m, id: new(byte), table: newTable("CONTAINER", "PROJECT", "STATE", "PORTS", "IMAGE")}
 }
 
-func (d dockerScreen) Init() tea.Cmd {
+// Init reads the containers and starts the refresh chain: each read of the
+// chain arms the next tick, so reads never overlap.
+func (d dockerScreen) Init() tea.Cmd { return d.load(d.id) }
+
+func (d dockerScreen) load(chain *byte) tea.Cmd {
 	return func() tea.Msg {
 		list, err := docker.Containers(d.m.R)
 		slices.SortStableFunc(list, func(a, b docker.Container) int {
@@ -60,7 +82,7 @@ func (d dockerScreen) Init() tea.Cmd {
 			}
 			return cmp.Or(cmp.Compare(a.Project, b.Project), cmp.Compare(a.Name, b.Name))
 		})
-		return dockerMsg{list, err}
+		return dockerMsg{list, err, chain}
 	}
 }
 
@@ -80,12 +102,28 @@ func (d dockerScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			d.table.cursor, d.want = i, ""
 		}
 		d.table.setRows(d.rows())
-		return d, nil
+		if msg.chain != d.id {
+			return d, nil
+		}
+		return d, tea.Tick(autoRefresh, func(time.Time) tea.Msg { return dockerTickMsg{d.id} })
+	case dockerTickMsg:
+		if msg.chain != d.id {
+			return d, nil
+		}
+		return d, d.load(d.id)
 	case taskDoneMsg:
-		return d, d.Init()
+		return d, d.load(nil)
 	case tea.MouseClickMsg:
 		if m := mouse(d.layout(), msg); m != nil {
 			return d.Update(m)
+		}
+		return d, nil
+	}
+	if d.asking {
+		c, ev := d.ask.update(msg)
+		d.ask, d.asking = c, ev == editing
+		if ev == submitted {
+			return d, d.run(d.verb, d.target)
 		}
 		return d, nil
 	}
@@ -93,27 +131,60 @@ func (d dockerScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.table = t
 		return d, nil
 	}
-	if k, ok := msg.(tea.KeyPressMsg); ok {
-		switch k.String() {
-		case "esc":
-			return d, Back
-		case "r":
-			return d, d.Init()
-		}
+	k, ok := msg.(tea.KeyPressMsg)
+	if !ok || disabled(d.buttons(), k.String()) {
+		return d, nil
+	}
+	switch k.String() {
+	case "esc":
+		return d, Back
+	case "r":
+		return d, d.load(nil)
+	case "l":
+		return openDockerLogs(d, d.list[d.table.selected()].Name)
+	}
+	if v, ok := dockerVerbs[k.String()]; ok {
+		d.verb, d.target, d.asking = v, d.list[d.table.selected()].Name, true
+		d.ask = newConfirm(strings.ToUpper(v[0][:1]) + v[0][1:] + " " + d.target + "?")
 	}
 	return d, nil
 }
 
-func (d dockerScreen) typing() bool { return d.table.typing() }
+// run runs verb (a dockerVerbs entry) on the container named name as a Task.
+func (d dockerScreen) run(verb [2]string, name string) tea.Cmd {
+	title := strings.ToUpper(verb[0][:1]) + verb[0][1:] + " " + name
+	return runTask(title, "docker "+verb[0]+" "+name, verb[1]+" "+name,
+		taskStep{title, func(r system.Runner, _ io.Writer) error { return docker.Do(r, verb[0], name) }})
+}
+
+func (d dockerScreen) typing() bool { return d.table.typing() || d.asking && d.ask.typing() }
 
 func (d dockerScreen) keys() string {
-	if d.table.typing() {
+	switch {
+	case d.asking:
+		return d.ask.keys()
+	case d.table.typing():
 		return d.table.keys()
 	}
 	return d.table.keys() + " · " + keyHelp(d.buttons()) + " · esc back"
 }
 
-func (d dockerScreen) buttons() []button { return []button{{"r", "Refresh", ""}} }
+// buttons are the actions on the selected container, then Refresh.
+func (d dockerScreen) buttons() []button {
+	bs := []button{{"s", "Start", ""}, {"x", "Stop", ""}, {"R", "Restart", ""}, {"l", "Logs", ""}}
+	i := d.table.selected()
+	for j := range bs {
+		switch {
+		case i < 0 || d.err != nil:
+			bs[j].why = "no container selected"
+		case bs[j].key == "s" && d.list[i].State == "running":
+			bs[j].why = "already running"
+		case bs[j].key == "x" && d.list[i].State != "running":
+			bs[j].why = "not running"
+		}
+	}
+	return append(bs, button{"r", "Refresh", ""})
+}
 
 func (d dockerScreen) rows() [][]string {
 	var rows [][]string
@@ -140,7 +211,11 @@ func (d dockerScreen) layout() *lipgloss.Compositor {
 	if i := d.table.selected(); i >= 0 && d.h >= 26 {
 		blocks = append(blocks, detailBox(d.list[i].Name, d.detail(d.list[i]), d.w, 3))
 	}
-	return stack(append(blocks, buttonRow(d.buttons()...))...)
+	c := stack(append(blocks, buttonRow(d.buttons()...))...)
+	if d.asking {
+		c.AddLayers(d.ask.layer(d.w))
+	}
+	return c
 }
 
 func (d dockerScreen) View() tea.View { return tea.NewView(d.layout().Render()) }
