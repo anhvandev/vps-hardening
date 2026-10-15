@@ -167,8 +167,11 @@ func (d diskScreen) startScan() (tea.Model, tea.Cmd) {
 	}
 }
 
+// close stops a running scan; the shell calls it when another screen opens
+// or the TUI quits.
+func (d diskScreen) close() { d.cancel("") }
+
 // cancel stops a running scan (killing du), noting state.
-// ponytail: leaving through the sidebar doesn't cancel; du runs to its end.
 func (d diskScreen) cancel(state string) diskScreen {
 	if d.scan != nil {
 		d.scan.Close()

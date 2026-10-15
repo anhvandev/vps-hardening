@@ -19,7 +19,7 @@ const aptSim = "Reading package lists...\nBuilding dependency tree...\n" +
 	"Inst tzdata [2024a-3ubuntu1.1] (2025b-0ubuntu0.24.04 Ubuntu:24.04/noble-updates [all])\n" +
 	"Conf libnss-systemd (255.4-1ubuntu8.18 Ubuntu:24.04/noble-security [amd64])\n"
 
-const aptSimCmd = "apt-get -s -o Debug::NoLocking=true upgrade"
+const aptSimCmd = "apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade"
 
 func TestAptList(t *testing.T) {
 	f := &system.Fake{Results: map[string]system.Result{aptSimCmd: {Stdout: aptSim}}}
@@ -44,7 +44,7 @@ func TestAptList(t *testing.T) {
 // advisories (one package under two advisories, one at an older version).
 func dnfHost() *system.Fake {
 	return &system.Fake{Results: map[string]system.Result{
-		"dnf -q check-update": {Code: 100, Stdout: "\n" +
+		"dnf -q -C check-update": {Code: 100, Stdout: "\n" +
 			"acl.x86_64                             2.4.0-1.el8_10                     baseos\n" +
 			"openssl-libs.x86_64                    1:3.5.8-3.el9_8                    baseos\n" +
 			"python3-a-very-long-package-name.noarch\n" +
@@ -54,7 +54,7 @@ func dnfHost() *system.Fake {
 			"    grub2-tools.x86_64                 1:2.06-90.el9                      @baseos\n"},
 		"rpm -q --qf %{NAME}.%{ARCH} %{EPOCH}:%{VERSION}-%{RELEASE}\n acl.x86_64 openssl-libs.x86_64 python3-a-very-long-package-name.noarch": {
 			Stdout: "acl.x86_64 (none):2.3.1-4.el8\nopenssl-libs.x86_64 1:3.5.8-2.el9_8\npython3-a-very-long-package-name.noarch (none):1.2-2.el9\n"},
-		"dnf -q updateinfo list --security": {Stdout: "" +
+		"dnf -q -C updateinfo list --security": {Stdout: "" +
 			"RLSA-2025:1111 Important/Sec. openssl-libs-1:3.5.8-3.el9_8.x86_64\n" +
 			"RLSA-2025:0999 Moderate/Sec.  openssl-libs-1:3.5.8-1.el9_8.x86_64\n" +
 			"RLSA-2025:2222 Low/Sec.       acl-2.4.0-1.el8_10.x86_64\n"},
@@ -78,14 +78,14 @@ func TestDnfList(t *testing.T) {
 
 // Nothing pending: check-update exits 0 and nothing else runs.
 func TestDnfListNone(t *testing.T) {
-	f := &system.Fake{Results: map[string]system.Result{"dnf -q check-update": {Stdout: "\n"}}}
+	f := &system.Fake{Results: map[string]system.Result{"dnf -q -C check-update": {Stdout: "\n"}}}
 	if got, err := List(f, "dnf"); err != nil || len(got) != 0 {
 		t.Errorf("got %v, %v", got, err)
 	}
 }
 
 func TestDnfListError(t *testing.T) {
-	f := &system.Fake{Results: map[string]system.Result{"dnf -q check-update": {Code: 1, Stderr: "Error: Failed to download metadata"}}}
+	f := &system.Fake{Results: map[string]system.Result{"dnf -q -C check-update": {Code: 1, Stderr: "Error: Failed to download metadata"}}}
 	if _, err := List(f, "dnf"); err == nil {
 		t.Error("want an error")
 	}
@@ -95,7 +95,7 @@ func TestDnfListError(t *testing.T) {
 // or lets dnf pick them by advisory; installing all upgrades everything.
 func TestInstall(t *testing.T) {
 	aptSec := "env DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold --only-upgrade libnss-systemd perl-base curl"
-	aptAll := "env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::=--force-confold"
+	aptAll := "env DEBIAN_FRONTEND=noninteractive apt-get --with-new-pkgs upgrade -y -o Dpkg::Options::=--force-confold"
 	for _, c := range []struct {
 		manager  string
 		security bool
@@ -114,6 +114,19 @@ func TestInstall(t *testing.T) {
 		if !slices.Equal(f.Calls, c.want) {
 			t.Errorf("%s security=%v ran %q, want %q", c.manager, c.security, f.Calls, c.want)
 		}
+	}
+}
+
+// A security kernel update is a new package pulled in by its metapackage:
+// apt names the upgraded metapackage only, and installs the new kernel with
+// it (never kept back, nothing removed).
+func TestAptInstallSecurityKernel(t *testing.T) {
+	sec := "env DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold --only-upgrade linux-image-generic"
+	f := &system.Fake{Results: map[string]system.Result{sec: {}, aptSimCmd: {Stdout: "" +
+		"Inst linux-image-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-security [amd64])\n" +
+		"Inst linux-image-generic [6.8.0-49.49] (6.8.0-50.51 Ubuntu:24.04/noble-security [amd64])\n"}}}
+	if err := Install(f, "apt", true); err != nil || !slices.Equal(f.Calls, []string{aptSimCmd, sec}) {
+		t.Errorf("ran %q, %v", f.Calls, err)
 	}
 }
 

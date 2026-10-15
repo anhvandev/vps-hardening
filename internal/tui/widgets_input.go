@@ -113,7 +113,11 @@ func (f form) view() string {
 		ls = append(ls, titleStyle.Render(f.title))
 	}
 	for i, l := range f.labels {
-		v := f.inputs[i].View()
+		in := f.inputs[i]
+		if in.Width() == 0 && in.Value() == "" { // without a width bubbles shows a placeholder's first rune only
+			in.SetWidth(ansi.StringWidth(in.Placeholder))
+		}
+		v := in.View()
 		if o := f.opts[i]; o.names != nil {
 			v = o.view(i == f.focus, v)
 		}

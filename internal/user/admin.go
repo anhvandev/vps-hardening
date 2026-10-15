@@ -103,7 +103,7 @@ func (m *Manager) writeSudoers(name string) error {
 	if b, err := os.ReadFile(dst); err == nil && string(b) == content {
 		return nil
 	}
-	return writeAtomic(dst, []byte(content), 0o440, func(tmp string) error {
+	return system.WriteAtomic(dst, []byte(content), 0o440, func(tmp string) error {
 		return m.run("visudo", "-cf", tmp)
 	})
 }
@@ -145,30 +145,4 @@ func (m *Manager) run(name string, args ...string) error {
 		return fmt.Errorf("%s %s: exit %d: %s", name, strings.Join(args, " "), res.Code, strings.TrimSpace(res.Stderr))
 	}
 	return nil
-}
-
-// writeAtomic stages data beside path (dot-prefixed, so sudo ignores it), lets
-// prepare validate/chown the staged file, then renames it into place. A
-// failure at any step leaves path untouched.
-func writeAtomic(path string, data []byte, mode os.FileMode, prepare func(tmp string) error) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".vpsctl-")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer os.Remove(tmp) // no-op after a successful rename
-	_, err = f.Write(data)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Chmod(tmp, mode)
-	}
-	if err == nil && prepare != nil {
-		err = prepare(tmp)
-	}
-	if err == nil {
-		err = os.Rename(tmp, path)
-	}
-	return err
 }

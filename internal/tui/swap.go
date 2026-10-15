@@ -139,11 +139,8 @@ func (s swapScreen) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, nil
 	}
 	size, h := gib<<30, swap.Human(gib<<30)
-	free := s.sw.free
-	if own, ok := s.sw.s.Own(); ok && s.resize {
-		free += own.Size // the old file's space comes back
-	}
-	if err := swap.DiskRefusal(free, size); err != nil && s.sw.freeErr == nil {
+	// a resize builds the new file beside the old one: both need the disk
+	if err := swap.DiskRefusal(s.sw.free, size); err != nil && s.sw.freeErr == nil {
 		s.form.err, s.sizing = err.Error(), true
 		return s, nil
 	}
@@ -151,12 +148,12 @@ func (s swapScreen) formUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.resize {
 		s.ask = newConfirm("Resize the swapfile to " + h + "?")
 		s.run = runTask("Resize swapfile", "swap resize "+h, "resized swapfile to "+h, s.step("Resize "+swap.File, func(r system.Runner) error {
-			return swap.Resize(r, s.m.Root, size)
+			return swap.Resize(r, s.m.Root, size, s.m.Host.SELinux)
 		}))
 	} else {
 		s.ask = newConfirm("Create a " + h + " swapfile?")
 		s.run = runTask("Create swapfile", "swap create "+h, "created "+h+" swapfile", s.step("Create "+swap.File, func(r system.Runner) error {
-			return swap.Create(r, s.m.Root, size)
+			return swap.Create(r, s.m.Root, size, s.m.Host.SELinux)
 		}))
 	}
 	return s, nil

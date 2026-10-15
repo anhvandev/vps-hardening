@@ -2,6 +2,7 @@ package tui
 
 import (
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -161,5 +162,77 @@ func TestHardeningStatusApplySkippedStep(t *testing.T) {
 	}
 	if out := oneOutput(t, h); !strings.Contains(out, "systemctl restart fail2ban") || strings.Contains(out, "sysctl") {
 		t.Errorf("Task output:\n%s", out)
+	}
+}
+
+// openCloudUser is hardenedHost where the Default Cloud User ubuntu is open
+// (login shell, a key): its step is Missing.
+func openCloudUser(t *testing.T) *testHost {
+	h := hardenedHost(t)
+	h.fake.Results["getent passwd"] = system.Result{Stdout: "root:x:0:0:root:/root:/bin/bash\nubuntu:x:1000:1000::/home/ubuntu:/bin/bash\nanh:x:1001:1001::/home/anh:/bin/bash\n"}
+	h.fake.Results["getent shadow"] = system.Result{Stdout: "ubuntu:!:19000:0:99999:7:::\nanh:!:19000:0:99999:7:::\n"}
+	h.write("/home/ubuntu/.ssh/authorized_keys", "ssh-ed25519 BBBB ubuntu\n")
+	h.fake.Results["usermod -L -s /usr/sbin/nologin ubuntu"] = system.Result{}
+	return h
+}
+
+// openHardeningAt opens the Hardening Status of h at row n.
+func openHardeningAt(t *testing.T, h *testHost, n int) *teatest.TestModel {
+	tm := startSized(h, 120, 40)
+	waitFor(t, tm, "Uptime")
+	tm.Type(menuTo("Hardening"))
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "sysctl hardening")
+	tm.Type(strings.Repeat("j", n))
+	return tm
+}
+
+// Locking the Default Cloud Users would lock the operator's own session
+// user: the Lockout Guard disables Apply with the reason, and Apply all
+// missing leaves it out.
+func TestHardeningStatusCloudUsersGuardsOwnUser(t *testing.T) {
+	t.Setenv("SUDO_USER", "ubuntu")
+	h := openCloudUser(t)
+	tm := openHardeningAt(t, h, 4)
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	tm.Type("a")
+	v := ctrlCView(t, tm)
+	if !lineHas(v, "Default Cloud Users locked", "⚠ Missing", "ubuntu is your own session's user") {
+		t.Errorf("no refusal on the row:\n%s", v)
+	}
+	if strings.Contains(v, "Task:") || slices.Contains(h.fake.Calls, "usermod -L -s /usr/sbin/nologin ubuntu") {
+		t.Errorf("ran a Task:\n%s", v)
+	}
+}
+
+// Apply runs the full run's pre-lock assertions for the Admin User first;
+// a failure locks no one.
+func TestHardeningStatusCloudUsersPreLockAssertions(t *testing.T) {
+	t.Setenv("SUDO_USER", "")
+	h := openCloudUser(t)
+	tm := openHardeningAt(t, h, 4)
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "pre-lock assertion failed")
+	ctrlCView(t, tm)
+	if slices.Contains(h.fake.Calls, "usermod -L -s /usr/sbin/nologin ubuntu") {
+		t.Errorf("ubuntu locked despite the failed assertion: %q", h.fake.Calls)
+	}
+	if out := oneOutput(t, h); !strings.Contains(out, "sshd -T -C user=anh") {
+		t.Errorf("assertions not run for anh:\n%s", out)
+	}
+}
+
+// The Lockout Guard is checked again under the lock: here the session
+// changed after the screen was read.
+func TestHardeningStatusCloudUsersGuardUnderLock(t *testing.T) {
+	t.Setenv("SUDO_USER", "")
+	h := openCloudUser(t)
+	tm := openHardeningAt(t, h, 4)
+	t.Setenv("SUDO_USER", "ubuntu")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "your own session's user")
+	ctrlCView(t, tm)
+	if slices.Contains(h.fake.Calls, "usermod -L -s /usr/sbin/nologin ubuntu") {
+		t.Errorf("ubuntu locked: %q", h.fake.Calls)
 	}
 }

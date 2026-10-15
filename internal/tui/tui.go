@@ -141,7 +141,8 @@ func New(m *harden.Machine, now time.Time) Model {
 	noDocker.Store(!docker.Installed(m.R))
 	t := Model{m: m, now: now, machine: machineLine(m), cursor: slices.Index(items(), "Overview"),
 		screen: screens["Overview"](m), refresh: now}
-	t.readHardening()
+	b := readBadge(m) // the first frame shows the right badge
+	t.hardened, t.done, t.chosen = b.hardened, b.done, b.chosen
 	return t
 }
 
@@ -166,11 +167,13 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return t, tea.Batch(t.tick(), cmd)
 	case startTaskMsg:
 		return t.startTask(msg)
-	case taskStepMsg, taskLineMsg, taskEndMsg, taskGateMsg, taskTermMsg:
+	case taskStepMsg, taskWarnMsg, taskLineMsg, taskEndMsg, taskGateMsg, taskTermMsg:
 		return t.taskUpdate(msg)
 	case backMsg:
 		t.focused = false
-		t.readHardening()
+		return t, t.readHardening()
+	case badgeMsg:
+		t.hardened, t.done, t.chosen = msg.hardened, msg.done, msg.chosen
 		return t, nil
 	case NewVersionMsg:
 		t.newer = msg
@@ -206,6 +209,9 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		t.screen, cmd = t.screen.Update(msg)
 		return t, cmd
 	case tea.MouseWheelMsg:
+		if k := t.task; k != nil && k.shown && k.ended && k.full { // the wheel scrolls the full output
+			return t.scrollOutput(map[tea.MouseButton]int{tea.MouseWheelUp: 3, tea.MouseWheelDown: -3}[msg.Button]), nil
+		}
 		x, y, ok := t.local(msg.X, msg.Y)
 		if !ok || t.help || t.task != nil && t.task.shown {
 			return t, nil
@@ -219,7 +225,7 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// A running Task is never abandoned (Stage A would stay without
 			// restore); at the Verify Gate ctrl+c means "Stop safely".
 			if !t.running() {
-				return t, tea.Quit
+				return t.quit()
 			}
 			t.busyNote = true
 			if t.task.gate != nil {
@@ -239,6 +245,8 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if s, ok := t.screen.(interface{ typing() bool }); ok && !s.typing() {
 			switch msg.String() { // screens on the shared widgets leave these to the shell
+			case "q":
+				return t.menuKey("q")
 			case "?":
 				t.help = true
 				return t, nil
@@ -266,7 +274,7 @@ func (t Model) menuKey(key string) (tea.Model, tea.Cmd) {
 			t.busyNote = true
 			return t, nil
 		}
-		return t, tea.Quit
+		return t.quit()
 	case "t":
 		if t.task != nil {
 			t.task.shown = true
@@ -293,17 +301,27 @@ func (t Model) menuKey(key string) (tea.Model, tea.Cmd) {
 	return t, nil
 }
 
+// closeScreen tells the open screen to stop its work (follow, scan), if any.
+func (t Model) closeScreen() {
+	if c, ok := t.screen.(interface{ close() }); ok {
+		c.close()
+	}
+}
+
+// quit stops the open screen's work and quits.
+func (t Model) quit() (tea.Model, tea.Cmd) {
+	t.closeScreen()
+	return t, tea.Quit
+}
+
 // open builds a fresh screen for title and focuses it; unbuilt titles do nothing.
 func (t Model) open(title string) (tea.Model, tea.Cmd) {
 	if !shown(title) {
 		return t, nil
 	}
-	if c, ok := t.screen.(interface{ close() }); ok { // e.g. stop following logs
-		c.close()
-	}
+	t.closeScreen() // e.g. stop following logs
 	t.cursor = slices.Index(items(), title)
 	t.screen, t.focused, t.overlay, t.help, t.refresh = screens[title](t.m), true, false, false, t.now
-	t.readHardening()
 	t.screen, _ = t.screen.Update(t.contentSize())
-	return t, t.screen.Init()
+	return t, tea.Batch(t.screen.Init(), t.readHardening())
 }

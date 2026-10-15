@@ -271,8 +271,8 @@ func TestLockDefaultCloudUsersAndBlockCloudInit(t *testing.T) {
 	os.MkdirAll(filepath.Join(h.root, "etc/cloud/cloud.cfg.d"), 0o755)
 	m := newManager(h, "debian")
 
-	if err := m.LockDefaultCloudUsers(); err != nil {
-		t.Fatal(err)
+	if names, err := m.LockDefaultCloudUsers(); err != nil || !slices.Equal(names, []string{"ubuntu"}) {
+		t.Fatalf("locked %q, %v", names, err)
 	}
 	if fi, _ := os.Stat(ak); fi.Size() != 0 {
 		t.Fatal("authorized_keys not emptied")

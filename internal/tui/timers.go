@@ -72,6 +72,9 @@ func (s timersScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.table.height = max(s.h-14, 3)
 		s.table.setRows(s.table.rows)
 		return s, nil
+	case openMsg: // Overview links to a Timer that missed its run
+		s.pick = msg.item
+		return s, nil
 	case timersMsg:
 		s.list, s.err, s.loaded = msg.list, msg.err, true
 		var rows [][]string

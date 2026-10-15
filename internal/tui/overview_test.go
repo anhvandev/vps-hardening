@@ -23,7 +23,7 @@ func overviewHost(t *testing.T) *testHost {
 	h.fake.Results["systemctl list-timers --all --plain --no-legend --no-pager"] = system.Result{Stdout: "" +
 		"Thu 2026-10-15 03:00:00 UTC 5h left Wed 2026-10-14 03:00:00 UTC 18h ago backup.timer backup.service\n"}
 	h.fake.Results["systemctl list-unit-files --type=timer --plain --no-legend --no-pager"] = system.Result{Stdout: "backup.timer enabled enabled\n"}
-	h.fake.Results["apt-get -s -o Debug::NoLocking=true upgrade"] = system.Result{Stdout: "" +
+	h.fake.Results["apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade"] = system.Result{Stdout: "" +
 		"Inst openssl [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-security [amd64])\n" +
 		"Inst vim [2:9.1.0016-1ubuntu7.3] (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates [amd64])\n" +
 		"Inst curl [8.5.0-2ubuntu10.4] (8.5.0-2ubuntu10.5 Ubuntu:24.04/noble-updates [amd64])\n"}
@@ -52,7 +52,7 @@ func TestOverviewCards(t *testing.T) {
 func TestOverviewMissingDataIsAState(t *testing.T) {
 	h := debianHost(t)
 	h.fake.Results["ufw status"] = system.Result{Stdout: "Status: inactive\n"}
-	delete(h.fake.Results, "apt-get -s -o Debug::NoLocking=true upgrade")
+	delete(h.fake.Results, "apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade")
 	delete(h.fake.Results, "fail2ban-client status")
 	tm := start(h)
 	waitFor(t, tm, "Uptime")
@@ -78,6 +78,22 @@ func TestOverviewFailedServiceOpensIt(t *testing.T) {
 	ctrlCView(t, tm)
 }
 
+// Clicking "Timers missed" opens Timers on the Timer that missed.
+func TestOverviewMissedTimerOpensIt(t *testing.T) {
+	h := overviewHost(t)
+	h.fake.Results["systemctl list-timers --all --plain --no-legend --no-pager"] = system.Result{Stdout: "" +
+		"Thu 2026-10-15 06:00:00 UTC 8h left Wed 2026-10-14 06:00:00 UTC 16h ago apt-daily.timer apt-daily.service\n" +
+		"Thu 2026-10-15 03:00:00 UTC 5h left Wed 2026-10-14 03:00:00 UTC 18h ago backup.timer backup.service\n"}
+	h.fake.Results["systemctl list-unit-files --type=timer --plain --no-legend --no-pager"] = system.Result{Stdout: "apt-daily.timer enabled enabled\nbackup.timer enabled enabled\n"}
+	tm := start(h)
+	waitFor(t, tm, "Timer missed")
+	tm.Send(overviewClick(50, 13)) // Services card: running, backup, nginx, then the Timers line
+	waitFor(t, tm, "NEXT RUN")
+	if v := ctrlCView(t, tm); !strings.Contains(v, "▌backup.timer") {
+		t.Errorf("backup.timer not selected:\n%s", v)
+	}
+}
+
 // Clicking the Logins line opens Logins.
 func TestOverviewLoginsOpensLogins(t *testing.T) {
 	tm := start(loginsHost(t))
@@ -85,6 +101,26 @@ func TestOverviewLoginsOpensLogins(t *testing.T) {
 	tm.Send(overviewClick(4, 7)) // Security card, fifth line
 	waitFor(t, tm, "Top failing IPs")
 	ctrlCView(t, tm)
+}
+
+// Pending updates are listed on open and then only every 10 minutes; the
+// other cards still refresh every 5 s.
+func TestOverviewListsUpdatesEvery10Minutes(t *testing.T) {
+	h := overviewHost(t)
+	tm := start(h)
+	waitFor(t, tm, "Uptime")
+	h.fake.Results["apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade"] = system.Result{Stdout: ""}
+	units := "systemctl list-units --type=service --all --plain --no-legend --no-pager"
+	for i, name := range []string{"worker", "zebra"} { // a new failed Service each refresh shows it ran
+		h.fake.Results[units] = system.Result{Stdout: name + ".service  loaded failed   failed  x\n"}
+		tm.Send(tickMsg{now: time.Now().Add([]time.Duration{refreshEvery + time.Second, 11 * time.Minute}[i])})
+		waitFor(t, tm, name)
+	}
+	v := quitView(t, tm)
+	wantAll(t, v, "0 security · 0 other pending")
+	if n := strings.Count(strings.Join(h.fake.Calls, "\n"), "apt-get -s"); n != 2 {
+		t.Errorf("listed updates %d times, want 2 (open, after 10 min)", n)
+	}
 }
 
 // The shell's tick moves "refreshed Ns ago".

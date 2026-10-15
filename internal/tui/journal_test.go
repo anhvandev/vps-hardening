@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -74,6 +76,50 @@ func TestJournalFollowStreamsUntilLeft(t *testing.T) {
 		t.Errorf("stream still open after leaving the journal: %v", err)
 	}
 	ctrlCView(t, tm)
+}
+
+// pipeClosed reports whether w's reader was closed (the child stopped):
+// a write fails at once, else it is read or blocks.
+func pipeClosed(w io.Writer) bool {
+	done := make(chan error, 1)
+	go func() { _, err := io.WriteString(w, "late\n"); done <- err }()
+	select {
+	case err := <-done:
+		return errors.Is(err, io.ErrClosedPipe)
+	case <-time.After(time.Second):
+		return false
+	}
+}
+
+// Leaving a followed journal through the sidebar, or quitting, stops
+// journalctl too.
+func TestJournalFollowStopsOnSidebarAndQuit(t *testing.T) {
+	for _, leave := range []string{"sidebar", "quit"} {
+		t.Run(leave, func(t *testing.T) {
+			h := svcHost(t)
+			h.fake.Results[cronTail] = system.Result{Stdout: "cron old line\n"}
+			pr, pw := io.Pipe()
+			h.fake.Streams = map[string]io.ReadCloser{"journalctl -u cron.service -n 200 -f --no-pager": pr}
+			tm := openServices(t, h)
+			tm.Type("l")
+			waitFor(t, tm, "cron old line")
+			tm.Type("f")
+			waitFor(t, tm, "following live")
+			if leave == "sidebar" {
+				tm.Send(tea.KeyPressMsg{Code: tea.KeyTab})
+				tm.Type(strings.Repeat("j", slices.Index(items(), "Overview")-slices.Index(items(), "Services")))
+				tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+				waitFor(t, tm, "Uptime")
+				if !pipeClosed(pw) {
+					t.Error("journalctl still running after leaving through the sidebar")
+				}
+			}
+			ctrlCView(t, tm)
+			if !pipeClosed(pw) {
+				t.Error("journalctl still running")
+			}
+		})
+	}
 }
 
 func TestJournalUnreadable(t *testing.T) {

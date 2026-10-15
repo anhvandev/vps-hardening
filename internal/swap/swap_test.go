@@ -79,7 +79,7 @@ func TestCreate(t *testing.T) {
 		"mkswap /vpsctl.swap":                  {Stdout: "Setting up swapspace version 1\n"},
 		"swapon /vpsctl.swap":                  {},
 	}}
-	if err := Create(f, root, 2*gib); err != nil {
+	if err := Create(f, root, 2*gib, false); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"df -B1 --output=avail /", "rm -f /vpsctl.swap", "fallocate -l 2147483648 /vpsctl.swap",
@@ -104,7 +104,7 @@ func TestCreateFallsBackToDD(t *testing.T) {
 		"mkswap /vpsctl.swap":                              {},
 		"swapon /vpsctl.swap":                              {},
 	}}
-	if err := Create(f, root, gib); err != nil {
+	if err := Create(f, root, gib, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := fstab(t, root); got != "/vpsctl.swap none swap sw 0 0\n" {
@@ -112,11 +112,41 @@ func TestCreateFallsBackToDD(t *testing.T) {
 	}
 }
 
+// With SELinux on, the swapfile gets the swapfile_t type before swapon
+// (else swapon is denied); a resize labels the new file.
+func TestSwapfileLabelledOnSELinux(t *testing.T) {
+	root := host(t, noSwap, mem2G, tab)
+	f := &system.Fake{Results: map[string]system.Result{
+		"df -B1 --output=avail /":              {Stdout: "Avail\n10737418240\n"},
+		"rm -f /vpsctl.swap":                   {},
+		"fallocate -l 1073741824 /vpsctl.swap": {},
+		"chmod 600 /vpsctl.swap":               {},
+		"mkswap /vpsctl.swap":                  {},
+		"chcon -t swapfile_t /vpsctl.swap":     {},
+		"swapon /vpsctl.swap":                  {},
+	}}
+	if err := Create(f, root, gib, true); err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.Index(f.Calls, "chcon -t swapfile_t /vpsctl.swap"); i < 0 || f.Calls[i+1] != "swapon /vpsctl.swap" {
+		t.Errorf("calls = %q", f.Calls)
+	}
+
+	root, f = resizeHost(t)
+	f.Results["chcon -t swapfile_t /vpsctl.swap.new"] = system.Result{}
+	if err := Resize(f, root, 3*gib, true); err != nil {
+		t.Fatal(err)
+	}
+	if i := slices.Index(f.Calls, "chcon -t swapfile_t /vpsctl.swap.new"); i < 0 || i > slices.Index(f.Calls, "swapon /vpsctl.swap") {
+		t.Errorf("calls = %q", f.Calls)
+	}
+}
+
 // Not enough free disk: refused before anything is written.
 func TestCreateRefusedWithoutDisk(t *testing.T) {
 	root := host(t, noSwap, mem2G, tab)
 	f := &system.Fake{Results: map[string]system.Result{"df -B1 --output=avail /": {Stdout: "Avail\n2147483648\n"}}}
-	err := Create(f, root, 2*gib)
+	err := Create(f, root, 2*gib, false)
 	if err == nil || !strings.HasPrefix(err.Error(), "refused: not enough free disk") {
 		t.Fatalf("err = %v", err)
 	}
@@ -127,7 +157,7 @@ func TestCreateRefusedWithoutDisk(t *testing.T) {
 
 func TestCreateRefusedWhenOwnSwapfileExists(t *testing.T) {
 	f := &system.Fake{}
-	if err := Create(f, host(t, ownSwap, mem2G, tab), gib); err == nil || len(f.Calls) != 0 {
+	if err := Create(f, host(t, ownSwap, mem2G, tab), gib, false); err == nil || len(f.Calls) != 0 {
 		t.Errorf("err = %v, calls %q", err, f.Calls)
 	}
 }
@@ -152,7 +182,7 @@ func TestRemoveAndResizeRefusedOnOOMRisk(t *testing.T) {
 	line := "/vpsctl.swap none swap sw 0 0\n"
 	root := host(t, ownSwap, mem2G, tab+line) // 1 GiB used, 512 MiB free RAM
 	f := &system.Fake{}
-	for name, err := range map[string]error{"remove": Remove(f, root), "resize": Resize(f, root, gib)} {
+	for name, err := range map[string]error{"remove": Remove(f, root), "resize": Resize(f, root, gib, false)} {
 		if err == nil || err.Error() != "refused: 1.0 GiB of swap in use exceeds 512 MiB free RAM (OOM risk)" {
 			t.Errorf("%s: err = %v", name, err)
 		}
@@ -162,30 +192,80 @@ func TestRemoveAndResizeRefusedOnOOMRisk(t *testing.T) {
 	}
 }
 
-// Resize recreates the swapfile at the new size; the old file's space counts as free.
+// resizeHost is an 8 GB machine with vpsctl's 2 GiB swapfile, 4 GiB free
+// on disk, where every command of a resize to 3 GiB works.
+func resizeHost(t *testing.T) (string, *system.Fake) {
+	root := host(t, ownSwap, mem8G, tab+"/vpsctl.swap none swap sw 0 0\n")
+	f := &system.Fake{Results: map[string]system.Result{"df -B1 --output=avail /": {Stdout: "Avail\n4294967296\n"}}}
+	for _, c := range resizeCalls {
+		f.Results[c] = system.Result{}
+	}
+	return root, f
+}
+
+var resizeCalls = []string{"rm -f /vpsctl.swap.new", "fallocate -l 3221225472 /vpsctl.swap.new", "chmod 600 /vpsctl.swap.new",
+	"mkswap /vpsctl.swap.new", "swapoff /vpsctl.swap", "mv -f /vpsctl.swap /vpsctl.swap.old",
+	"mv -f /vpsctl.swap.new /vpsctl.swap", "swapon /vpsctl.swap", "rm -f /vpsctl.swap.old"}
+
+// Resize builds the new swapfile beside the old one first, then switches:
+// the old one is off only once the new one is ready. Both are on disk for a
+// moment, so the old file's space doesn't count as free.
 func TestResize(t *testing.T) {
-	line := "/vpsctl.swap none swap sw 0 0\n"
-	root := host(t, ownSwap, mem8G, tab+line)
-	f := &system.Fake{Results: map[string]system.Result{
-		"df -B1 --output=avail /":              {Stdout: "Avail\n2147483648\n"}, // 2 GiB + the old 2 GiB
-		"swapoff /vpsctl.swap":                 {},
-		"rm -f /vpsctl.swap":                   {},
-		"fallocate -l 3221225472 /vpsctl.swap": {},
-		"chmod 600 /vpsctl.swap":               {},
-		"mkswap /vpsctl.swap":                  {},
-		"swapon /vpsctl.swap":                  {},
-	}}
-	if err := Resize(f, root, 3*gib); err != nil {
+	root, f := resizeHost(t)
+	if err := Resize(f, root, 3*gib, false); err != nil {
 		t.Fatal(err)
 	}
-	if f.Calls[1] != "swapoff /vpsctl.swap" || f.Calls[len(f.Calls)-1] != "swapon /vpsctl.swap" {
-		t.Errorf("calls = %q", f.Calls)
+	if want := append([]string{"df -B1 --output=avail /"}, resizeCalls...); !slices.Equal(f.Calls, want) {
+		t.Errorf("calls\n got %q\nwant %q", f.Calls, want)
 	}
-	if got := fstab(t, root); got != tab+line {
+	if got := fstab(t, root); got != tab+"/vpsctl.swap none swap sw 0 0\n" {
 		t.Errorf("fstab = %q", got)
 	}
 	f.Calls = nil
-	if err := Resize(f, root, 4*gib); err == nil || len(f.Calls) != 1 {
-		t.Errorf("4 GiB with 2+2 GiB free: err %v, calls %q", err, f.Calls)
+	if err := Resize(f, root, 4*gib, false); err == nil || len(f.Calls) != 1 {
+		t.Errorf("4 GiB with 4 GiB free: err %v, calls %q", err, f.Calls)
+	}
+}
+
+// failFirst fails the first run of cmd, as if the new swapfile could not be
+// turned on; later runs (turning the old one back on) work.
+type failFirst struct {
+	*system.Fake
+	cmd    string
+	failed bool
+}
+
+func (r *failFirst) Run(name string, args ...string) (system.Result, error) {
+	res, err := r.Fake.Run(name, args...)
+	if !r.failed && strings.Join(append([]string{name}, args...), " ") == r.cmd {
+		r.failed = true
+		return system.Result{Code: 255, Stderr: "swapon failed"}, nil
+	}
+	return res, err
+}
+
+// A failed resize keeps the old swapfile on: before the switch the new
+// file is just removed; after it, the old file is put back and turned on.
+func TestResizeFailureKeepsOldSwap(t *testing.T) {
+	for _, c := range []struct {
+		fail string
+		tail []string // the calls after the failing one
+	}{
+		{"mkswap /vpsctl.swap.new", []string{"rm -f /vpsctl.swap.new"}},
+		{"swapoff /vpsctl.swap", []string{"rm -f /vpsctl.swap.new"}},
+		{"swapon /vpsctl.swap", []string{"mv -f /vpsctl.swap /vpsctl.swap.new", "mv -f /vpsctl.swap.old /vpsctl.swap",
+			"swapon /vpsctl.swap", "rm -f /vpsctl.swap.new"}},
+	} {
+		root, f := resizeHost(t)
+		f.Results["mv -f /vpsctl.swap /vpsctl.swap.new"] = system.Result{}
+		f.Results["mv -f /vpsctl.swap.old /vpsctl.swap"] = system.Result{}
+		r := &failFirst{Fake: f, cmd: c.fail}
+		if err := Resize(r, root, 3*gib, false); err == nil {
+			t.Errorf("%s failing: no error", c.fail)
+		}
+		i := slices.Index(f.Calls, c.fail)
+		if i < 0 || !slices.Equal(f.Calls[i+1:], c.tail) {
+			t.Errorf("%s failing: calls %q", c.fail, f.Calls)
+		}
 	}
 }

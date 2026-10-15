@@ -27,6 +27,8 @@ type overview struct {
 	cpu     cpuTimes
 	at, now time.Time // the last read; the shell's clock
 	loading bool
+	pending string    // the Updates card's pending line, as last listed
+	listed  time.Time // when it was listed (shell's clock), zero: never
 }
 
 // card is a titled box; to is where a click on it leads (title "" = nowhere).
@@ -47,10 +49,12 @@ type cardLine struct {
 type cpuTimes struct{ busy, total float64 }
 
 type overviewMsg struct {
-	cards []card
-	swap  bool
-	cpu   cpuTimes
-	at    time.Time
+	cards   []card
+	swap    bool
+	cpu     cpuTimes
+	at      time.Time
+	pending string // the pending updates line
+	listed  bool   // pending was listed now
 }
 
 func newOverview(m *harden.Machine) tea.Model { return overview{m: m, loading: true} }
@@ -58,11 +62,15 @@ func newOverview(m *harden.Machine) tea.Model { return overview{m: m, loading: t
 func (o overview) Init() tea.Cmd { return o.load() }
 
 func (o overview) load() tea.Cmd {
-	prev := o.cpu
+	prev, pending := o.cpu, o.pending
+	if o.listed.IsZero() || o.now.Sub(o.listed) >= updatesEvery {
+		pending = "" // list the updates again
+	}
 	return func() tea.Msg {
 		at := time.Now()
 		res, swapNone, cpu := o.resources(prev)
-		return overviewMsg{[]card{o.security(), res, o.updates(at), o.services()}, swapNone, cpu, at}
+		upd, listedNow := o.updates(at, pending)
+		return overviewMsg{[]card{o.security(), res, upd, o.services()}, swapNone, cpu, at, listedNow, pending == ""}
 	}
 }
 
@@ -71,9 +79,12 @@ func (o overview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		o.w = msg.Width
 	case overviewMsg:
-		o.cards, o.swap, o.cpu, o.at, o.loading = msg.cards, msg.swap, msg.cpu, msg.at, false
+		o.cards, o.swap, o.cpu, o.at, o.loading, o.pending = msg.cards, msg.swap, msg.cpu, msg.at, false, msg.pending
 		if o.now.Before(o.at) {
 			o.now = o.at
+		}
+		if msg.listed {
+			o.listed = o.now
 		}
 	case tickMsg:
 		if msg.now.After(o.now) { // the clock never runs back
@@ -146,6 +157,9 @@ func (o overview) cardLayer(i, w, h int) *lipgloss.Layer {
 }
 
 func (o overview) buttons() []button { return []button{{"s", "Create swap", ""}} }
+
+// typing: never (no text field), so ?, m, tab and q go to the shell.
+func (o overview) typing() bool { return false }
 
 func (o overview) keys() string {
 	if o.swap {

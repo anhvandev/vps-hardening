@@ -157,3 +157,17 @@ func TestStatusCloudInitAbsent(t *testing.T) {
 		t.Errorf("cloud-init %+v", st)
 	}
 }
+
+// A Default Cloud User with a key and vpsctl's sudo rule is not the Admin
+// User: Hardening locks it.
+func TestStatusAdminIsNeverADefaultCloudUser(t *testing.T) {
+	m, f := hardenedMachine(t)
+	os.Remove(filepath.Join(m.Root, "/etc/sudoers.d/99-vpsctl-anh"))
+	f.Results["getent passwd"] = system.Result{Stdout: "ubuntu:x:1000:1000::/home/ubuntu:/bin/bash\nanh:x:1001:1001::/home/anh:/bin/bash\n"}
+	f.Results["getent shadow"] = system.Result{Stdout: "ubuntu:!:19000:0:99999:7:::\nanh:!:19000:0:99999:7:::\n"}
+	write(t, filepath.Join(m.Root, "/etc/sudoers.d/99-vpsctl-ubuntu"), "ubuntu ALL=(ALL) NOPASSWD:ALL\n", 0o644)
+	write(t, filepath.Join(m.Root, "/home/ubuntu/.ssh/authorized_keys"), "ssh-ed25519 AAAA ubuntu\n", 0o600)
+	if st := m.Status(nil)[0]; st.State != Missing {
+		t.Errorf("admin %+v, want Missing (ubuntu is a Default Cloud User)", st)
+	}
+}

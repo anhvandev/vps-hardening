@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/anhvandev/vpsctl/internal/system"
 )
 
 // InstallKey makes sure name holds an SSH key someone actually has: it
@@ -122,7 +124,7 @@ func (m *Manager) writeAuthorizedKeys(pw PasswdEntry, keys []byte) error {
 	if err := os.Chown(sshDir, pw.UID, pw.GID); err != nil {
 		return err
 	}
-	if err := writeAtomic(filepath.Join(sshDir, "authorized_keys"), keys, 0o600, func(tmp string) error {
+	if err := system.WriteAtomic(filepath.Join(sshDir, "authorized_keys"), keys, 0o600, func(tmp string) error {
 		return os.Chown(tmp, pw.UID, pw.GID)
 	}); err != nil {
 		return err

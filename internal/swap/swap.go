@@ -129,7 +129,8 @@ func FreeDisk(r system.Runner) (int64, error) {
 
 // Create makes, enables and persists vpsctl's swapfile of size bytes;
 // refused, with nothing written, when it exists or the disk is too full.
-func Create(r system.Runner, root string, size int64) error {
+// selinux (Host.SELinux) labels it so swapon is allowed.
+func Create(r system.Runner, root string, size int64, selinux bool) error {
 	s, err := Read(root)
 	if err != nil {
 		return err
@@ -144,12 +145,27 @@ func Create(r system.Runner, root string, size int64) error {
 	if err := DiskRefusal(free, size); err != nil {
 		return err
 	}
-	return build(r, root, size)
+	if err := write(r, File, size, selinux); err != nil {
+		return err
+	}
+	if err := run(r, "swapon", File); err != nil {
+		return err
+	}
+	return editFstab(root, true)
 }
 
-// Resize recreates vpsctl's swapfile at size bytes (off, rewrite, on);
-// refused, with nothing changed, on OOM risk or a too full disk.
-func Resize(r system.Runner, root string, size int64) error {
+// The new swapfile while Resize builds it, and the old one while it switches.
+const (
+	newFile = File + ".new"
+	oldFile = File + ".old"
+)
+
+// Resize replaces vpsctl's swapfile with one of size bytes, built beside it
+// first, so a failure never leaves the machine without it: the old one goes
+// off only once the new one is ready, and is put back on if the switch
+// fails. Refused, with nothing changed, on OOM risk or a too full disk (both
+// files are on disk for a moment). selinux as for Create.
+func Resize(r system.Runner, root string, size int64, selinux bool) error {
 	s, err := Read(root)
 	if err != nil {
 		return err
@@ -161,14 +177,36 @@ func Resize(r system.Runner, root string, size int64) error {
 	if err != nil {
 		return err
 	}
-	own, _ := s.Own()
-	if err := DiskRefusal(free+own.Size, size); err != nil { // the old file's space comes back
+	if err := DiskRefusal(free, size); err != nil {
 		return err
+	}
+	// undo runs cmds, best effort, and returns err saying the old swapfile stays.
+	undo := func(err error, cmds ...[]string) error {
+		for _, c := range cmds {
+			run(r, c[0], c[1:]...)
+		}
+		return fmt.Errorf("%w (kept the old swapfile)", err)
+	}
+	rmNew, on, back := []string{"rm", "-f", newFile}, []string{"swapon", File}, []string{"mv", "-f", oldFile, File}
+	if err := write(r, newFile, size, selinux); err != nil {
+		return undo(err, rmNew)
 	}
 	if err := run(r, "swapoff", File); err != nil {
-		return err
+		return undo(err, rmNew)
 	}
-	return build(r, root, size)
+	if err := run(r, "mv", "-f", File, oldFile); err != nil {
+		return undo(err, on, rmNew)
+	}
+	if err := run(r, "mv", "-f", newFile, File); err != nil {
+		return undo(err, back, on, rmNew)
+	}
+	if err := run(r, "swapon", File); err != nil {
+		return undo(err, []string{"mv", "-f", File, newFile}, back, on, rmNew)
+	}
+	if err := run(r, "rm", "-f", oldFile); err != nil {
+		return fmt.Errorf("resized, but the old swapfile is left at %s: %w", oldFile, err)
+	}
+	return editFstab(root, true)
 }
 
 // Remove turns vpsctl's swapfile off, drops its fstab line and deletes it;
@@ -190,23 +228,28 @@ func Remove(r system.Runner, root string) error {
 	return run(r, "rm", "-f", File)
 }
 
-// build writes File (fallocate, or dd where unsupported), enables it and
-// adds its fstab line.
-func build(r system.Runner, root string, size int64) error {
-	if err := run(r, "rm", "-f", File); err != nil { // a stale, inactive one
+// write makes path a swap area of size bytes, not yet on (fallocate, or dd
+// where unsupported); with selinux it gets the swapfile_t type swapon needs
+// (a path-based restorecon would give vpsctl's path the default type).
+func write(r system.Runner, path string, size int64, selinux bool) error {
+	if err := run(r, "rm", "-f", path); err != nil { // a stale, inactive one
 		return err
 	}
-	if run(r, "fallocate", "-l", strconv.FormatInt(size, 10), File) != nil {
-		if err := run(r, "dd", "if=/dev/zero", "of="+File, "bs=1M", fmt.Sprintf("count=%d", size>>20)); err != nil {
+	if run(r, "fallocate", "-l", strconv.FormatInt(size, 10), path) != nil {
+		if err := run(r, "dd", "if=/dev/zero", "of="+path, "bs=1M", fmt.Sprintf("count=%d", size>>20)); err != nil {
 			return err
 		}
 	}
-	for _, c := range [][]string{{"chmod", "600", File}, {"mkswap", File}, {"swapon", File}} {
+	cmds := [][]string{{"chmod", "600", path}, {"mkswap", path}}
+	if selinux {
+		cmds = append(cmds, []string{"chcon", "-t", "swapfile_t", path})
+	}
+	for _, c := range cmds {
 		if err := run(r, c[0], c[1:]...); err != nil {
 			return err
 		}
 	}
-	return editFstab(root, true)
+	return nil
 }
 
 // editFstab adds (on) or drops vpsctl's swapfile line, keeping every other line.
@@ -229,28 +272,7 @@ func editFstab(root string, on bool) error {
 	if on {
 		lines = append(lines, fstabLine+"\n")
 	}
-	return writeAtomic(path, []byte(strings.Join(lines, "")))
-}
-
-// writeAtomic replaces path with data via a temp file beside it, so a
-// failure never leaves a half-written fstab.
-func writeAtomic(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".vpsctl-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name()) // no-op after rename
-	_, err = f.Write(data)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Chmod(f.Name(), 0o644)
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), path)
-	}
-	return err
+	return system.WriteAtomic(path, []byte(strings.Join(lines, "")), 0o644, nil) // never a half-written fstab
 }
 
 // run runs a command; a non-zero exit is an error with its stderr.

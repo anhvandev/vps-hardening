@@ -174,7 +174,7 @@ const helpText = `Keys
   h        Hardening (while not hardened)
   t        reopen the hidden Task
   m        mouse on/off     ?       this help
-  ctrl+c   quit             q       quit (from the sidebar)
+  ctrl+c   quit             q       quit (unless typing)
 
 Mouse: click a sidebar item, the Hardening badge, a hidden Task
 in the status bar, table rows and buttons; the wheel scrolls tables.
@@ -202,6 +202,8 @@ func (t Model) status() (left, right string) {
 	switch {
 	case t.task != nil && t.task.shown && t.task.gate != nil:
 		right = "←/→ choose · enter confirm · ctrl+c stop safely"
+	case t.task != nil && t.task.shown && t.task.ended && t.task.full:
+		right = "↑↓ pgup pgdn scroll · enter close · o hide output"
 	case t.task != nil && t.task.shown && t.task.ended:
 		right = "enter close · o output"
 	case t.task != nil && t.task.shown:
@@ -268,11 +270,7 @@ func (t Model) frame() string {
 	}
 	body := strings.Split(content, "\n")
 	if t.task != nil && t.task.shown { // the Task panel, over the screen
-		cw, rows := inner-1, t.h-6
-		if wide {
-			cw, rows = inner-sideW-2, t.h-4
-		}
-		body = overlay(body, t.panel(min(cw-2, 76), rows-1), 0, 1)
+		body = overlay(body, t.panel(t.panelSize()), 0, 1)
 	}
 	at := func(ls []string, i int) string {
 		if i < len(ls) {

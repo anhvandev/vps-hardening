@@ -1,8 +1,8 @@
 package tui
 
 import (
-	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,14 +34,15 @@ var skipFlags = []string{"--skip-firewall", "--skip-fail2ban", "--skip-updates",
 // Gate in its panel and the private key shown raw outside the TUI
 // (rawKeyMachine) or written to the key file.
 type hardening struct {
-	m      *harden.Machine
-	loaded bool           // the Hardening Status was read
-	steps  []harden.Step  // the Hardening Status
-	rec    *harden.Record // nil without a Hardening Record
-	hst    bool           // the Hardening Status shows, not the wizard
-	table  table
-	w, ht  int
-	form   form // the wizard
+	m       *harden.Machine
+	loaded  bool           // the Hardening Status was read
+	steps   []harden.Step  // the Hardening Status
+	rec     *harden.Record // nil without a Hardening Record
+	lockWhy string         // the Lockout Guard's refusal to lock the Default Cloud Users
+	hst     bool           // the Hardening Status shows, not the wizard
+	table   table
+	w, ht   int
+	form    form // the wizard
 }
 
 func newHardening(m *harden.Machine) tea.Model {
@@ -59,15 +60,35 @@ func newHardening(m *harden.Machine) tea.Model {
 func (h hardening) Init() tea.Cmd {
 	return func() tea.Msg {
 		rec, _ := harden.LoadRecord(h.m.Root) // unreadable = none: live checks still tell Done/Missing
-		return hardeningMsg{h.m.Status(rec), rec}
+		msg := hardeningMsg{steps: h.m.Status(rec), rec: rec}
+		if s, ok := stepOf(msg.steps, "cloud-users"); ok && s.State != harden.Done {
+			users, err := h.m.ManagedUsers()
+			if err == nil {
+				_, err = cloudUsersAdmin(users, rec)
+			}
+			if err != nil {
+				msg.lockWhy = err.Error()
+			}
+		}
+		return msg
 	}
+}
+
+// stepOf is the step of steps with id; false if there is none.
+func stepOf(steps []harden.Step, id string) (harden.Step, bool) {
+	i := slices.IndexFunc(steps, func(s harden.Step) bool { return s.ID == id })
+	if i < 0 {
+		return harden.Step{}, false
+	}
+	return steps[i], true
 }
 
 func (h hardening) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case hardeningMsg:
-		h.loaded, h.steps, h.rec = true, msg.steps, msg.rec
-		h.hst = msg.steps[1].State == harden.Done // key-only SSH
+		h.loaded, h.steps, h.rec, h.lockWhy = true, msg.steps, msg.rec, msg.lockWhy
+		ssh, _ := stepOf(msg.steps, "ssh") // key-only SSH
+		h.hst = ssh.State == harden.Done
 		h.table.setRows(h.rows())
 		return h, nil
 	case taskDoneMsg:
@@ -128,13 +149,15 @@ func (h hardening) start() (tea.Model, tea.Cmd) {
 		port, _ = h.m.CurrentPort()
 	}
 	var steps []taskStep
-	for _, s := range harden.Steps(o) {
+	runSteps, summary := harden.Steps(o)
+	for _, s := range runSteps {
 		steps = append(steps, taskStep{s.Name, func(r system.Runner, out io.Writer) error {
 			return s.Do(rawKeyMachine(taskMachine(h.m, r), taskTerminal(out)), out, taskGate(out, gateCommand(h.m.Root, port, o.User)))
 		}})
 	}
-	summary := fmt.Sprintf("admin %s · ssh :%d · password auth off · root login off", o.User, port)
-	return h, runTask("Hardening", "harden "+strings.Join(args, " "), summary, steps...)
+	return h, func() tea.Msg {
+		return startTaskMsg{name: "Hardening", action: "harden " + strings.Join(args, " "), steps: steps, summarize: summary}
+	}
 }
 
 // layout is the Hardening Status, or the wizard: header with the badge, the

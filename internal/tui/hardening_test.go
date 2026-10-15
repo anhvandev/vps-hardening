@@ -164,6 +164,31 @@ func TestHardeningWizardHappyPath(t *testing.T) {
 	}
 }
 
+// An optional step that fails doesn't fail Hardening, but the result card
+// says so, under the run's real SUMMARY.
+func TestHardeningWizardOptionalStepFailureWarns(t *testing.T) {
+	h, sim, tty, _ := unhardenedHost(t)
+	sim.users["ubuntu"] = "ubuntu:x:1000:1000::/home/ubuntu:/bin/bash\n"
+	tm := openWizard(t, h, sim, tty)
+	key := filepath.Join(t.TempDir(), "alice.key")
+	tm.Type("alice")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyDown}) // Private key
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyRight})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}) // save to file
+	tm.Type(key)
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "Stop safely")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyLeft}) // to "Login works"
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "Done with warnings")
+	v := ctrlCView(t, tm)
+	wantAll(t, v, "SUMMARY  admin alice · ssh :22", "Default Cloud Users locked: ubuntu", "fail2ban not applied:")
+	if strings.Contains(v, "✓ Done") {
+		t.Errorf("a failed optional step shows as plain Done:\n%s", v)
+	}
+}
+
 // The wizard validates like `vpsctl harden`: bad combinations never start a
 // run; root, Default Cloud Users and system accounts are refused.
 func TestHardeningWizardValidatesLikeCLI(t *testing.T) {

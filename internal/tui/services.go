@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -30,8 +31,9 @@ type servicesScreen struct {
 	m      *harden.Machine
 	loaded bool
 	list   []service.Service
-	err    error // list unreadable
-	all    bool  // filter: all Services, not only running·enabled·failed
+	state  map[string]service.Status // by name; empty if unreadable
+	err    error                     // list unreadable
+	all    bool                      // filter: all Services, not only running·enabled·failed
 	table  table
 	status string
 	edit   *unitEdit // override being edited, nil if none
@@ -46,12 +48,13 @@ type servicesScreen struct {
 
 // servicesMsg is one read of the Services.
 type servicesMsg struct {
-	list []service.Service
-	err  error
+	list  []service.Service
+	state map[string]service.Status
+	err   error
 }
 
 func newServices(m *harden.Machine) tea.Model {
-	return servicesScreen{m: m, table: newTable("UNIT", "STATE", "ENABLED", "NOTE")}
+	return servicesScreen{m: m, table: newTable("UNIT", "STATE", "ENABLED", "SINCE", "NOTE")}
 }
 
 func (s servicesScreen) Init() tea.Cmd { return s.reload() }
@@ -59,7 +62,18 @@ func (s servicesScreen) Init() tea.Cmd { return s.reload() }
 func (s servicesScreen) reload() tea.Cmd {
 	return func() tea.Msg {
 		list, err := service.List(s.m.R)
-		return servicesMsg{list, err}
+		state := map[string]service.Status{}
+		var names []string
+		for _, svc := range list {
+			names = append(names, svc.Name)
+		}
+		if len(names) > 0 {
+			st, _ := service.Show(s.m.R, names) // unreadable: SINCE, exit, mem and pid unknown
+			for i, x := range st {
+				state[names[i]] = x
+			}
+		}
+		return servicesMsg{list, state, err}
 	}
 }
 
@@ -96,7 +110,7 @@ func (s servicesScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.table.setRows(s.rows())
 		return s, nil
 	case servicesMsg:
-		s.list, s.err, s.loaded = msg.list, msg.err, true
+		s.list, s.state, s.err, s.loaded = msg.list, msg.state, msg.err, true
 		s.table.setRows(s.rows())
 		if s.pick != "" {
 			s, s.pick = s.selectUnit(s.pick), ""
@@ -271,11 +285,21 @@ func (s servicesScreen) rows() [][]string {
 		if svc.Enabled == "enabled" {
 			enabled = okStyle.Render(glyph("●"))
 		}
-		note := ""
+		since, note := "—", ""
+		if t := s.state[svc.Name].Since; !t.IsZero() {
+			since = strings.Fields(span(time.Since(t)))[0]
+		}
+		switch r := s.state[svc.Name].Result; {
+		case svc.Active != "failed" || r == "":
+		case r == "exit-code":
+			note = "exit " + s.state[svc.Name].Exit
+		default:
+			note = r
+		}
 		if refusal(svc.Name, "stop") != "" {
 			note = glyph("◆") + " Protected Unit"
 		}
-		rows = append(rows, []string{svc.Name, st, enabled, note})
+		rows = append(rows, []string{svc.Name, st, enabled, since, note})
 	}
 	return rows
 }
@@ -330,6 +354,12 @@ func (s servicesScreen) detail(unit string) string {
 	if b, err := os.ReadFile(service.OverridePath(s.m.Root, unit)); err == nil {
 		lines[1] = "vendor unit + override (" + service.OverridePath("", unit) + ", " +
 			strconv.Itoa(strings.Count(strings.TrimRight(string(b), "\n"), "\n")+1) + " lines)"
+	}
+	if st := s.state[unit]; st.Mem > 0 {
+		lines[1] += " · mem " + strconv.FormatUint(st.Mem>>20, 10) + " MB"
+	}
+	if st := s.state[unit]; st.PID > 0 {
+		lines[1] += " · pid " + strconv.Itoa(st.PID)
 	}
 	var off []string
 	why := ""

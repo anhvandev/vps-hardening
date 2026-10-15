@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -104,6 +105,20 @@ func enter(tm *teatest.TestModel) { tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 // managed reports whether sim has the user name.
 func (s *usersSim) managed(name string) bool {
 	return slices.ContainsFunc(s.passwd, func(l string) bool { return strings.HasPrefix(l, name+":") })
+}
+
+// LAST LOGIN is the newest SSH login of the last 7 days; "—" when none is
+// known.
+func TestUsersLastLogin(t *testing.T) {
+	_, _, tm, _ := usersScreen(t, nil, func(h *testHost, sim *usersSim) {
+		sim.addUser("bob")
+		h.fake.Results[strings.Replace(loginsQuery, "%s", "168h", 1)] = system.Result{Stdout: journalLine(time.Now().Add(-3*time.Hour).Unix(), "9",
+			"Accepted publickey for alice from 192.0.2.8 port 7000 ssh2")}
+	})
+	v := ctrlCView(t, tm) // usersScreen waited for the loaded list
+	if !regexp.MustCompile(`alice .*3h 0m ago`).MatchString(v) || !regexp.MustCompile(`bob .* — `).MatchString(v) {
+		t.Errorf("last logins:\n%s", v)
+	}
 }
 
 // New users come from a form and are created as a Task; a refused name

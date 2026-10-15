@@ -16,10 +16,11 @@ import (
 
 func init() { screens["Updates"] = newUpdates }
 
-// updatesScreen lists the pending updates, read after refreshing the package
-// lists, and whether a reboot is waiting. s installs the security updates
-// (Yes/No), u all of them (type "all"), b reboots (type "reboot"); each runs
-// as a Task, the package manager's output shown live.
+// updatesScreen lists the pending updates, read from the package lists as
+// they are, and whether a reboot is waiting. r refreshes the package lists,
+// s installs the security updates (Yes/No), u all of them (type "all"), b
+// reboots (type "reboot"); each runs as a Task, the package manager's output
+// shown live, and the installs refresh the lists first.
 type updatesScreen struct {
 	m      *harden.Machine
 	loaded bool
@@ -33,7 +34,6 @@ type updatesScreen struct {
 type updatesMsg struct {
 	pkgs          []updates.Package
 	err           error // not listed
-	stale         error // package lists not refreshed
 	reboot, known bool
 	kernel        string
 }
@@ -45,7 +45,6 @@ func newUpdates(m *harden.Machine) tea.Model {
 func (u updatesScreen) Init() tea.Cmd {
 	return func() tea.Msg {
 		var msg updatesMsg
-		msg.stale = updates.Refresh(u.m.R, u.m.Host.PkgManager)
 		msg.pkgs, msg.err = updates.List(u.m.R, u.m.Host.PkgManager)
 		msg.reboot, msg.known, msg.kernel = updates.RebootNeeded(u.m.R, u.m.Root, u.m.Host.PkgManager)
 		return msg
@@ -103,8 +102,7 @@ func (u updatesScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "b":
 		u.asking, u.ask = "b", newDangerous("Reboot the machine", "Reboot", "reboot")
 	case "r":
-		u.loaded = false
-		return u, u.Init()
+		return u, u.run("r")
 	}
 	return u, nil
 }
@@ -114,6 +112,8 @@ func (u updatesScreen) run(key string) tea.Cmd {
 	mgr := u.m.Host.PkgManager
 	refresh := taskStep{"Refresh package lists", func(r system.Runner, _ io.Writer) error { return updates.Refresh(r, mgr) }}
 	switch key {
+	case "r":
+		return runTask("Refresh package lists", "updates refresh", "package lists refreshed", refresh)
 	case "s":
 		return runTask("Install security updates", "updates install security", "security updates installed", refresh,
 			taskStep{"Install security updates", func(r system.Runner, _ io.Writer) error { return updates.Install(r, mgr, true) }})
@@ -222,13 +222,10 @@ func (u updatesScreen) summary() string {
 func (u updatesScreen) layout() *lipgloss.Compositor {
 	title := titleStyle.Render("Updates")
 	if !u.loaded {
-		return stack(title, "", "refreshing package lists…")
+		return stack(title, "", "loading…")
 	}
 	summary := u.summary()
 	blocks := []any{title + strings.Repeat(" ", max(u.w-ansi.StringWidth(title)-ansi.StringWidth(summary), 1)) + summary}
-	if u.up.stale != nil {
-		blocks = append(blocks, warnStyle.Render("package lists not refreshed: "+u.up.stale.Error()))
-	}
 	if u.up.err != nil {
 		blocks = append(blocks, "updates unreadable: "+u.up.err.Error())
 	} else {

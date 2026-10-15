@@ -107,14 +107,18 @@ func (s stream) Close() error {
 // Fake is a scripted Runner for tests. Results is keyed by the full command
 // line ("systemctl is-enabled ssh.socket"); unscripted commands fail as if the
 // binary were missing. Streams scripts Stream the same way. Every call is
-// appended to Calls.
+// appended to Calls. Safe for concurrent calls (a TUI reads in the
+// background); change Results only between them.
 type Fake struct {
 	Results map[string]Result
 	Streams map[string]io.ReadCloser
 	Calls   []string
+	mu      sync.Mutex
 }
 
 func (f *Fake) Stream(name string, args ...string) (io.ReadCloser, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	line := strings.Join(append([]string{name}, args...), " ")
 	f.Calls = append(f.Calls, line)
 	rc, ok := f.Streams[line]
@@ -125,6 +129,8 @@ func (f *Fake) Stream(name string, args ...string) (io.ReadCloser, error) {
 }
 
 func (f *Fake) Run(name string, args ...string) (Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	line := strings.Join(append([]string{name}, args...), " ")
 	f.Calls = append(f.Calls, line)
 	res, ok := f.Results[line]

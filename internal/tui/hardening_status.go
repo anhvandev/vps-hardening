@@ -6,6 +6,7 @@ package tui
 // the SSH port and key rows link to the SSH and Users screens instead.
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -16,34 +17,88 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
+	"github.com/anhvandev/vpsctl/internal/user"
 )
 
-// hardeningMsg is the Hardening Status read for the Hardening screen.
+// hardeningMsg is the Hardening Status read for the Hardening screen;
+// lockWhy is why the Lockout Guard refuses locking the Default Cloud Users.
 type hardeningMsg struct {
-	steps []harden.Step
-	rec   *harden.Record
+	steps   []harden.Step
+	rec     *harden.Record
+	lockWhy string
 }
 
-// readHardening re-reads the Hardening Status behind the header badge: SSH
-// key-only, and steps Done of those not Skipped.
-// ponytail: runs every step check (~10 commands) inside Update; move it to a
-// Cmd once the test Runners are safe for concurrent use.
-func (t *Model) readHardening() {
-	rec, _ := harden.LoadRecord(t.m.Root)
-	t.done, t.chosen = 0, 0
-	for _, s := range t.m.Status(rec) {
-		if s.ID == "ssh" {
-			t.hardened = s.State == harden.Done
-		}
-		if s.State != harden.Skipped {
-			t.chosen++
-		}
-		if s.State == harden.Done {
-			t.done++
+// cloudUsersAdmin is the Admin User that keeps the operator in once the
+// Default Cloud Users in users are locked, or the Lockout Guard's refusal:
+// never lock the session's own user or the last usable Admin User.
+func cloudUsersAdmin(users []user.ManagedUser, rec *harden.Record) (string, error) {
+	f := guard.Facts{SessionUser: system.SessionUser(), Users: slices.Clone(users)}
+	for i, u := range f.Users { // one by one: each lock counts for the next
+		if slices.Contains(user.DefaultCloudUsers, u.Name) {
+			if err := guard.Check(f, guard.UserAction{User: u.Name, Verb: "lock"}); err != nil {
+				return "", err
+			}
+			f.Users[i].Locked = true
 		}
 	}
+	admin, ok := harden.AdminUser(users, rec)
+	if !ok {
+		return "", errors.New("refused: no usable Admin User would be left to log in as")
+	}
+	return admin.Name, nil
+}
+
+// lockCloudUsers is the cloud-users step under the lock: the Lockout Guard
+// on live facts, then the full run's pre-lock assertions for the Admin User
+// (through tm, the step's Machine), then the lock.
+func lockCloudUsers(m, tm *harden.Machine) error {
+	users, err := m.ManagedUsers() // through m: shadow stays out of the output
+	if err != nil {
+		return err
+	}
+	rec, _ := harden.LoadRecord(m.Root)
+	admin, err := cloudUsersAdmin(users, rec)
+	if err != nil {
+		return err
+	}
+	if err := tm.PreLockAssertions(admin); err != nil {
+		return fmt.Errorf("pre-lock assertion failed: %w", err)
+	}
+	_, err = tm.LockDefaultCloudUsers()
+	return err
+}
+
+// badgeMsg is the Hardening Status behind the header badge: SSH key-only,
+// and steps Done of those not Skipped.
+type badgeMsg struct {
+	hardened     bool
+	done, chosen int
+}
+
+// readBadge reads the badge's Hardening Status of m (every step check).
+func readBadge(m *harden.Machine) badgeMsg {
+	rec, _ := harden.LoadRecord(m.Root)
+	var b badgeMsg
+	for _, s := range m.Status(rec) {
+		if s.ID == "ssh" {
+			b.hardened = s.State == harden.Done
+		}
+		if s.State != harden.Skipped {
+			b.chosen++
+		}
+		if s.State == harden.Done {
+			b.done++
+		}
+	}
+	return b
+}
+
+// readHardening re-reads the badge in the background, off Update.
+func (t Model) readHardening() tea.Cmd {
+	return func() tea.Msg { return readBadge(t.m) }
 }
 
 func (h hardening) statusUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -89,26 +144,27 @@ var stepLinks = map[string]struct{ screen, label string }{
 	"port":  {"SSH", "Change in SSH"},
 }
 
-// stepApply applies one Hardening Step alone, the way Hardening does.
-var stepApply = map[string]func(*harden.Machine) error{
-	"firewall": func(m *harden.Machine) error {
+// stepApply applies one Hardening Step alone, the way Hardening does, on
+// tm, the Task step's Machine; m is the screen's (read secrets through it).
+var stepApply = map[string]func(m, tm *harden.Machine) error{
+	"firewall": func(_, m *harden.Machine) error {
 		port, err := m.CurrentPort()
 		if err == nil {
 			_, err = m.EnsureFirewall(port)
 		}
 		return err
 	},
-	"cloud-users": (*harden.Machine).LockDefaultCloudUsers,
-	"cloud-init":  (*harden.Machine).BlockCloudInitReinjection,
-	"fail2ban": func(m *harden.Machine) error {
+	"cloud-users": lockCloudUsers,
+	"cloud-init":  func(_, m *harden.Machine) error { return m.BlockCloudInitReinjection() },
+	"fail2ban": func(_, m *harden.Machine) error {
 		port, err := m.CurrentPort()
 		if err != nil {
 			return err
 		}
 		return m.Fail2ban(port)
 	},
-	"updates": (*harden.Machine).AutoUpdates,
-	"sysctl":  (*harden.Machine).Sysctl,
+	"updates": func(_, m *harden.Machine) error { return m.AutoUpdates() },
+	"sysctl":  func(_, m *harden.Machine) error { return m.Sysctl() },
 }
 
 // act presses the selected row's button: Apply, or open the linked screen.
@@ -121,17 +177,31 @@ func (h hardening) act() (tea.Model, tea.Cmd) {
 	if l, ok := stepLinks[s.ID]; ok {
 		return h, func() tea.Msg { return openMsg{title: l.screen} }
 	}
-	if s.State != harden.Done && stepApply[s.ID] != nil {
+	if h.applicable(s) && h.refusal(s) == "" {
 		return h, h.apply("Apply "+s.Name, s)
 	}
 	return h, nil
 }
 
-// missing are the Missing steps Apply can fix (Skipped ones stay a choice).
+// applicable: s is not Done and Apply can fix it.
+func (h hardening) applicable(s harden.Step) bool {
+	return s.State != harden.Done && stepApply[s.ID] != nil
+}
+
+// refusal is why the Lockout Guard refuses applying s, "" if it allows it.
+func (h hardening) refusal(s harden.Step) string {
+	if s.ID == "cloud-users" {
+		return h.lockWhy
+	}
+	return ""
+}
+
+// missing are the Missing steps Apply can fix (Skipped ones stay a choice)
+// and the Lockout Guard allows.
 func (h hardening) missing() []harden.Step {
 	var ms []harden.Step
 	for _, s := range h.steps {
-		if s.State == harden.Missing && stepApply[s.ID] != nil {
+		if s.State == harden.Missing && h.applicable(s) && h.refusal(s) == "" {
 			ms = append(ms, s)
 		}
 	}
@@ -146,7 +216,7 @@ func (h hardening) apply(name string, steps ...harden.Step) tea.Cmd {
 	for _, s := range steps {
 		ids, names = append(ids, s.ID), append(names, s.Name)
 		ts = append(ts, taskStep{s.Name, func(r system.Runner, _ io.Writer) error {
-			if err := stepApply[s.ID](taskMachine(h.m, r)); err != nil {
+			if err := stepApply[s.ID](h.m, taskMachine(h.m, r)); err != nil {
 				return err
 			}
 			return recordApplied(h.m.Root, s.ID)
@@ -210,7 +280,9 @@ func (h hardening) rows() [][]string {
 		}
 		if l, ok := stepLinks[s.ID]; ok {
 			btn = "[ " + l.label + " ]"
-		} else if s.State != harden.Done && stepApply[s.ID] != nil {
+		} else if why := h.refusal(s); h.applicable(s) && why != "" { // disabled, with the Lockout Guard's reason
+			btn, detail = naStyle.Render("[ Apply ]"), strings.TrimPrefix(why, "refused: ")
+		} else if h.applicable(s) {
 			btn = "[ Apply ]"
 		}
 		rows = append(rows, []string{s.Name, state, detail, btn})

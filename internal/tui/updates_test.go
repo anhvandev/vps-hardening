@@ -18,9 +18,9 @@ import (
 
 const (
 	aptRefresh  = "env DEBIAN_FRONTEND=noninteractive apt-get update"
-	aptSimulate = "apt-get -s -o Debug::NoLocking=true upgrade"
+	aptSimulate = "apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade"
 	aptSecurity = "env DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold --only-upgrade openssl"
-	aptAll      = "env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::=--force-confold"
+	aptAll      = "env DEBIAN_FRONTEND=noninteractive apt-get --with-new-pkgs upgrade -y -o Dpkg::Options::=--force-confold"
 )
 
 // updatesHost is debianHost with one security and one other update pending
@@ -67,8 +67,9 @@ func openUpdates(t *testing.T, h *testHost, r system.Runner) *teatest.TestModel 
 	return tm
 }
 
-// The list is read after refreshing the package lists: current → new
-// version and kind per package, counts and the pending reboot on top.
+// The list is read from the package lists as they are (no refresh outside
+// a Task): current → new version and kind per package, counts and the
+// pending reboot on top.
 func TestUpdatesList(t *testing.T) {
 	h := updatesHost(t)
 	tm := openUpdates(t, h, h.fake)
@@ -77,8 +78,24 @@ func TestUpdatesList(t *testing.T) {
 		"openssl", "3.0.13-0ubuntu3.4 → 3.0.13-0ubuntu3.5", "security",
 		"tzdata", "2024a-3ubuntu1.1 → 2025b-0ubuntu0.24.04", "other",
 		"[ Install security ]", "[ Install all … ]", "[ Reboot … ]")
-	if r := slices.Index(h.fake.Calls, aptRefresh); r < 0 || !slices.Contains(h.fake.Calls[r:], aptSimulate) {
-		t.Errorf("not refreshed before listing: %q", h.fake.Calls)
+	if slices.Contains(h.fake.Calls, aptRefresh) || !slices.Contains(h.fake.Calls, aptSimulate) {
+		t.Errorf("ran %q", h.fake.Calls)
+	}
+}
+
+// r refreshes the package lists as a short Task, then lists again.
+func TestUpdatesRefreshTask(t *testing.T) {
+	h := updatesHost(t)
+	tm := openUpdates(t, h, h.fake)
+	h.fake.Calls = nil
+	tm.Type("r")
+	waitFor(t, tm, "SUMMARY  package lists refreshed")
+	ctrlCView(t, tm)
+	if i := slices.Index(h.fake.Calls, aptRefresh); i < 0 || !slices.Contains(h.fake.Calls[i:], aptSimulate) {
+		t.Errorf("ran %q", h.fake.Calls)
+	}
+	if log := actionLog(t, h); !strings.Contains(log, "updates refresh: ok") {
+		t.Errorf("Task History:\n%s", log)
 	}
 }
 

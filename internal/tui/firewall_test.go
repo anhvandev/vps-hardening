@@ -266,6 +266,14 @@ func TestFirewallRemovesOnlySelectedRule(t *testing.T) {
 }
 
 // Bad input is refused inline, before any lock, command or log line.
+// The Open port field shows its whole placeholder, not only its first character.
+func TestFirewallOpenShowsPlaceholder(t *testing.T) {
+	tm := openFirewall(t, debianHost(t))
+	tm.Type("a")
+	waitFor(t, tm, "PORT[-END]/tcp|udp [from IP/CIDR], e.g. 8080/tcp")
+	ctrlCView(t, tm)
+}
+
 func TestFirewallOpenValidatesInput(t *testing.T) {
 	h := debianHost(t)
 	s := firewallScreenOn(h)
