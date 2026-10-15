@@ -111,7 +111,7 @@ func sideRows() []sideRow {
 	for _, g := range menu {
 		var its []sideRow
 		for _, title := range g.titles {
-			if _, ok := screens[title]; ok {
+			if shown(title) {
 				its = append(its, sideRow{title, true})
 			}
 		}
@@ -154,10 +154,10 @@ func (t Model) tabBar() string {
 		}
 		var its []string
 		for _, title := range g.titles {
-			switch _, ok := screens[title]; {
+			switch {
 			case title == cur:
 				its = append(its, lipgloss.NewStyle().Bold(true).Foreground(accent).Render(title))
-			case ok:
+			case shown(title):
 				its = append(its, title)
 			}
 		}

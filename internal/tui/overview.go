@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/anhvandev/vpsctl/internal/fail2ban"
 	"github.com/anhvandev/vpsctl/internal/firewall"
@@ -23,6 +25,7 @@ func init() { screens["Overview"] = newOverview }
 type overview struct {
 	m    *harden.Machine
 	rows []row // nil while loading
+	swap bool  // no swap: offer [ Create swap ]
 }
 
 type row struct{ label, value string }
@@ -36,9 +39,12 @@ func (o overview) Init() tea.Cmd {
 		rows := firewallRows(o.m)
 		rows = append(rows,
 			row{"fail2ban", fail2banState(o.m.R)},
+			row{"Docker", dockerState(o.m.R)},
+			row{"Logins 24h", loginsSummary(o.m)},
 			row{"Updates", updateState(o.m)},
 			row{"Disk /", diskState(o.m.R)},
-			row{"RAM", ramState(o.m.Root)})
+			row{"RAM", ramState(o.m.Root)},
+			row{"Swap", swapState(o.m.Root)})
 		return overviewMsg(rows)
 	}
 }
@@ -46,25 +52,46 @@ func (o overview) Init() tea.Cmd {
 func (o overview) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case overviewMsg:
-		o.rows = msg
+		o.rows, o.swap = msg, slices.Contains(msg, row{"Swap", "none"})
+	case tea.MouseClickMsg:
+		if m := mouse(o.layout(), msg); m != nil {
+			return o.Update(m)
+		}
 	case tea.KeyPressMsg:
-		if msg.String() == "esc" {
+		switch {
+		case msg.String() == "esc":
 			return o, Back
+		case msg.String() == "s" && o.swap:
+			return o, func() tea.Msg { return openMsg{title: "Swap"} }
 		}
 	}
 	return o, nil
 }
 
-func (o overview) View() tea.View {
+func (o overview) View() tea.View { return tea.NewView(o.layout().Render()) }
+
+func (o overview) layout() *lipgloss.Compositor {
 	if o.rows == nil {
-		return tea.NewView(titleStyle.Render("Overview") + "\n\nloading…")
+		return stack(titleStyle.Render("Overview"), "", "loading…")
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Overview") + "\n")
 	for _, r := range o.rows {
 		fmt.Fprintf(&b, "\n%-10s %s", r.label, r.value)
 	}
-	return tea.NewView(b.String())
+	if !o.swap {
+		return stack(b.String())
+	}
+	return stack(b.String(), "", buttonRow(o.buttons()...))
+}
+
+func (o overview) buttons() []button { return []button{{"s", "Create swap", ""}} }
+
+func (o overview) keys() string {
+	if o.swap {
+		return keyHelp(o.buttons()) + " · esc back"
+	}
+	return "esc back"
 }
 
 // firewallRows is the firewall state followed by one row per Firewall Rule.
