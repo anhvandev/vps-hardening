@@ -4,8 +4,9 @@ How a new `vpsctl` version reaches users. Pushing a `v*` tag runs
 `.github/workflows/release.yml`. It runs `go test ./...` and
 `tests/test-install.sh`, builds static `vpsctl-linux-amd64` and
 `vpsctl-linux-arm64` (`CGO_ENABLED=0`, version set from the tag), and
-publishes them with `sha256sums.txt` to the GitHub release. `install.sh`
-downloads exactly these assets.
+publishes them with `sha256sums.txt` and `install.sh` to the GitHub
+release. `install.sh` downloads exactly these assets; the attached copy is
+what `releases/latest/download/install.sh` serves.
 
 ## Versioning
 
@@ -48,6 +49,7 @@ Semver tags: `vMAJOR.MINOR.PATCH`.
    ```bash
    curl -fsSL "https://raw.githubusercontent.com/anhvandev/vpsctl/vX.Y.Z/install.sh" | bash -n
    curl -fsSL "https://github.com/anhvandev/vpsctl/releases/download/vX.Y.Z/sha256sums.txt"
+   curl -fsSL "https://github.com/anhvandev/vpsctl/releases/latest/download/install.sh" | grep 'VERSION:-vX.Y.Z'
    ```
 
    Then run the README one-liner once in a throwaway container or VM

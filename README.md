@@ -4,8 +4,10 @@ One static Go binary that hardens a freshly provisioned VPS. Run it as root
 on the VPS itself. It reads the live system (sshd, ufw/firewalld, systemd)
 on every run and uses a verify-then-cut flow so you never get locked out.
 
-M1 ships the non-interactive `vpsctl harden` command. Running `vpsctl` with
-no arguments only prints a placeholder; the management TUI is not built yet.
+`vpsctl harden` hardens the host in one non-interactive run. Running
+`vpsctl` with no arguments opens the management TUI: Hardening, Firewall,
+SSH, fail2ban, Logins, Users, Services, Timers, Cron, Docker, Overview,
+Updates, Disk, Swap and Task History.
 
 ## What `vpsctl harden` does
 
@@ -33,7 +35,15 @@ it skips the SSH restart and the Verify Gate.
 
 ## Install
 
-On the VPS, as root:
+On the VPS, as root. Latest release:
+
+```bash
+curl -fsSL https://github.com/anhvandev/vpsctl/releases/latest/download/install.sh \
+  | sudo bash -s -- --user myname
+```
+
+A pinned release (use this for automation, or to get the same version every
+time):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/anhvandev/vpsctl/v2.0.0/install.sh \
@@ -45,8 +55,10 @@ from the GitHub release, checks the sha256 (it stops on any mismatch) and
 installs the binary to `/usr/local/bin/vpsctl`. Any arguments after `--` are
 passed to `vpsctl harden`. With no arguments it only installs.
 
-**Always pin a tag in the URL**, never `main`. This tool rewrites sshd and
-firewall rules as root.
+Never install from `main`. This tool rewrites sshd and firewall rules as
+root. Both commands above install a tagged, tested release. The `latest` URL
+serves the `install.sh` attached to the newest release, and that script is
+pinned to its own tag.
 
 Env overrides:
 
@@ -61,12 +73,15 @@ Requirements: root, systemd as PID 1, `curl` or `wget`, `sha256sum`.
 ## Usage
 
 ```
+vpsctl                  (management TUI)
 vpsctl harden --user NAME [--port N] [--yes] [--key-out PATH] [--rotate-key]
               [--skip-firewall] [--skip-fail2ban] [--skip-updates] [--skip-sysctl]
+vpsctl self-update
 vpsctl version
 ```
 
 ```bash
+sudo vpsctl                                         # open the TUI
 sudo vpsctl harden --user myname                    # interactive, recommended
 sudo vpsctl harden --user myname --port 2222        # also move SSH to 2222
 sudo vpsctl harden --user myname --yes --key-out /root/mykey   # automation
@@ -87,6 +102,27 @@ Exit codes: `0` ok, `1` error, `2` usage, `3` stopped at the Verify Gate.
 Files: run log `/var/log/vpsctl/harden-<timestamp>.log`, action log
 `/var/log/vpsctl/actions.log`, lock `/run/vpsctl.lock` (only one mutating
 run at a time).
+
+## Update
+
+```bash
+sudo vpsctl self-update
+vpsctl version
+```
+
+`self-update` downloads the latest release for your architecture, checks
+its sha256 against `sha256sums.txt` (it stops on any mismatch) and replaces
+the installed binary. If you already run the latest version it changes
+nothing. The TUI shows a notice in the status bar when a newer release
+exists.
+
+To install a specific version instead (also to go back to an older one),
+rerun `install.sh` with `VPSCTL_VERSION`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/anhvandev/vpsctl/v2.0.0/install.sh \
+  | sudo VPSCTL_VERSION=v2.0.0 bash
+```
 
 ## Supported distros
 

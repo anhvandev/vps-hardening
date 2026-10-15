@@ -28,6 +28,7 @@ jobs:
               -o "dist/vpsctl-linux-$arch" ./cmd/vpsctl
           done
           cd dist && sha256sum vpsctl-linux-* > sha256sums.txt
+          cp ../install.sh .
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
