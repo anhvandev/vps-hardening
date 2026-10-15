@@ -4,8 +4,12 @@
 
 **Blocked by:** 02, 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Entries written before this change (no output file) still list, with "no output recorded".
-- [ ] Large histories load a bounded tail.
-- [ ] `teatest`: list, filter, open an output.
+- [x] Entries written before this change (no output file) still list, with "no output recorded".
+- [x] Large histories load a bounded tail.
+- [x] `teatest`: list, filter, open an output.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ fb61248 (merge). Code-review fixes in aa00873.

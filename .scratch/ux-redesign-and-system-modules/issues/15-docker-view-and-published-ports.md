@@ -4,8 +4,12 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Ports bound to 127.0.0.1/::1 are not flagged.
-- [ ] vpsctl never modifies Docker's firewall rules.
-- [ ] Unit tests with scripted docker output (with and without compose labels); `teatest`: Firewall shows the Published Port row.
+- [x] Ports bound to 127.0.0.1/::1 are not flagged.
+- [x] vpsctl never modifies Docker's firewall rules.
+- [x] Unit tests with scripted docker output (with and without compose labels); `teatest`: Firewall shows the Published Port row.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ 949e4c0 (merge). Code-review fixes in aa00873.

@@ -4,10 +4,14 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Width < 100 collapses the sidebar to a one-line tab bar; `tab` opens it as an overlay; below 80×24 only "terminal too small (need 80×24)" is shown.
-- [ ] One adaptive accent color; status colors green/yellow/red/grey; readable on a 16-color profile; ASCII fallbacks for `● ✓ ✗ ⚠ ▶ ◆` when the terminal can't render them.
-- [ ] Overview stays the default screen; keyboard navigation of the sidebar still works.
-- [ ] `teatest`: wide and narrow layouts, too-small message, sidebar click opens a screen, `m` toggles mouse, `?` overlay.
-- [ ] The TUI model takes "now" at construction so relative times are deterministic in tests.
+- [x] Width < 100 collapses the sidebar to a one-line tab bar; `tab` opens it as an overlay; below 80×24 only "terminal too small (need 80×24)" is shown.
+- [x] One adaptive accent color; status colors green/yellow/red/grey; readable on a 16-color profile; ASCII fallbacks for `● ✓ ✗ ⚠ ▶ ◆` when the terminal can't render them.
+- [x] Overview stays the default screen; keyboard navigation of the sidebar still works.
+- [x] `teatest`: wide and narrow layouts, too-small message, sidebar click opens a screen, `m` toggles mouse, `?` overlay.
+- [x] The TUI model takes "now" at construction so relative times are deterministic in tests.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ 7fa4a33 (merge). Code-review fixes in aa00873.

@@ -4,9 +4,13 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Live checks exist for every step: Admin User + key, key-only SSH + no root login, SSH port, firewall on, Default Cloud Users locked, cloud-init re-injection block, fail2ban, automatic security updates, sysctl.
-- [ ] No Record (hardened by hand or Record lost) still shows Done/Missing from live checks; Skipped needs the Record.
-- [ ] The Record never stores secrets; written atomically.
-- [ ] Unit tests: each step's detection over fake command output + temp root; Missing vs Skipped vs "was applied" combinations. `teatest`: hardened and unhardened renders, badge colors.
+- [x] Live checks exist for every step: Admin User + key, key-only SSH + no root login, SSH port, firewall on, Default Cloud Users locked, cloud-init re-injection block, fail2ban, automatic security updates, sysctl.
+- [x] No Record (hardened by hand or Record lost) still shows Done/Missing from live checks; Skipped needs the Record.
+- [x] The Record never stores secrets; written atomically.
+- [x] Unit tests: each step's detection over fake command output + temp root; Missing vs Skipped vs "was applied" combinations. `teatest`: hardened and unhardened renders, badge colors.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ ff52b32 (merge). Code-review fixes in aa00873.

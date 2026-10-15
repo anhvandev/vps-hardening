@@ -4,9 +4,13 @@
 
 **Blocked by:** 02, 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Applying one step changes only that step and updates the Record (a Skipped step that gets applied is no longer Skipped).
-- [ ] Stopping at the Verify Gate restores the pre-run SSH state, as today, and shows that in the result card.
-- [ ] Private key display still leaves the alternate screen; nothing secret in Task output.
-- [ ] `teatest`: apply fail2ban from Status; wizard through the gate with step list and SUMMARY; gate stop path.
+- [x] Applying one step changes only that step and updates the Record (a Skipped step that gets applied is no longer Skipped).
+- [x] Stopping at the Verify Gate restores the pre-run SSH state, as today, and shows that in the result card.
+- [x] Private key display still leaves the alternate screen; nothing secret in Task output.
+- [x] `teatest`: apply fail2ban from Status; wizard through the gate with step list and SUMMARY; gate stop path.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ c8f2485 (merge). Code-review fixes in aa00873.

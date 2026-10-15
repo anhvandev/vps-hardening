@@ -4,8 +4,12 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The `$EDITOR` hand-off and verify-before-apply behave as today.
-- [ ] Filter dropdown (running·enabled·failed / all) and `/` name filter work with keyboard and mouse.
-- [ ] `teatest`: restart as a Task; refused stop of ssh; journal follow; refresh tick.
+- [x] The `$EDITOR` hand-off and verify-before-apply behave as today.
+- [x] Filter dropdown (running·enabled·failed / all) and `/` name filter work with keyboard and mouse.
+- [x] `teatest`: restart as a Task; refused stop of ssh; journal follow; refresh tick.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ f8ad5a6 (merge). Code-review fixes in aa00873.

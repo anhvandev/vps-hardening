@@ -4,9 +4,13 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Only one mutating Task at a time (global lock); a second attempt is refused with the holder shown.
-- [ ] A Task's output file never contains private keys or values marked quiet (Cron commands etc.), same rule as today's log.
-- [ ] Navigating to another screen while a Task runs keeps it running; its result is still delivered.
-- [ ] `teatest`: open a port as a Task (steps, output, Done card), forced failure (Failed card names the step), Hide then reopen from the status bar, quit blocked while running.
+- [x] Only one mutating Task at a time (global lock); a second attempt is refused with the holder shown.
+- [x] A Task's output file never contains private keys or values marked quiet (Cron commands etc.), same rule as today's log.
+- [x] Navigating to another screen while a Task runs keeps it running; its result is still delivered.
+- [x] `teatest`: open a port as a Task (steps, output, Done card), forced failure (Failed card names the step), Hide then reopen from the status bar, quit blocked while running.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ 139f5de (merge). Code-review fixes in aa00873.

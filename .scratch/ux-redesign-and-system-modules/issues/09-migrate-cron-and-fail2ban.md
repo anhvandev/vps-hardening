@@ -4,8 +4,12 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Cron Entry commands stay out of Task output and Task History (quiet), as today.
-- [ ] Deleting a Cron Entry uses the normal confirm.
-- [ ] `teatest`: add a Cron Entry as a Task; unban as a Task; refresh tick.
+- [x] Cron Entry commands stay out of Task output and Task History (quiet), as today.
+- [x] Deleting a Cron Entry uses the normal confirm.
+- [x] `teatest`: add a Cron Entry as a Task; unban as a Task; refresh tick.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ 3a83ef2 (merge). Code-review fixes in aa00873.

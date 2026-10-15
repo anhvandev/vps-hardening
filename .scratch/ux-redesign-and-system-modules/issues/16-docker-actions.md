@@ -4,8 +4,12 @@
 
 **Blocked by:** 02, 14, 15
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Only dangling images are pruned; no containers, volumes or tagged images removed.
-- [ ] Leaving the logs view stops the follow process.
-- [ ] `teatest`: restart as a Task; logs follow; prune shown only when Docker exists.
+- [x] Only dangling images are pruned; no containers, volumes or tagged images removed.
+- [x] Leaving the logs view stops the follow process.
+- [x] `teatest`: restart as a Task; logs follow; prune shown only when Docker exists.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ db44d96 (merge). Code-review fixes in aa00873.

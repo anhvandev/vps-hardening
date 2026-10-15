@@ -4,8 +4,12 @@
 
 **Blocked by:** 03, 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Cards for modules added later (Docker, Logins, Swap) are lines each of those tickets adds; this ticket leaves room for them.
-- [ ] Missing data (fail2ban not installed, no updates info) shows as a state, never an error.
-- [ ] `teatest`: render, click a failed Service opens it, refresh tick updates values (tick injected, no real waiting).
+- [x] Cards for modules added later (Docker, Logins, Swap) are lines each of those tickets adds; this ticket leaves room for them.
+- [x] Missing data (fail2ban not installed, no updates info) shows as a state, never an error.
+- [x] `teatest`: render, click a failed Service opens it, refresh tick updates values (tick injected, no real waiting).
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ 80eb18a (merge). Code-review fixes in aa00873.

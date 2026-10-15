@@ -4,8 +4,12 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] No behaviour change in Lockout Guard decisions; existing tests keep passing (adapted to the new UI only).
-- [ ] Key generation still uses the raw-key display outside the alternate screen.
-- [ ] `teatest`: port change through the Task panel; dangerous delete; disabled lock on own user.
+- [x] No behaviour change in Lockout Guard decisions; existing tests keep passing (adapted to the new UI only).
+- [x] Key generation still uses the raw-key display outside the alternate screen.
+- [x] `teatest`: port change through the Task panel; dangerous delete; disabled lock on own user.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ b34f963 (merge). Code-review fixes in aa00873.

@@ -4,9 +4,13 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Shared keymap on every widget: `↑↓/jk`, `enter`, `esc`, `/` filter, `r` refresh, `a` add, `d` delete, `e` edit; screen keys listed in the status bar.
-- [ ] Mouse hit-testing for rows and buttons (prefer lipgloss v2 native hit-testing if it exists, else bubblezone); `bubbles` components as the base.
-- [ ] Lockout Guard refusals are never dialogs: disabled button + reason.
-- [ ] `teatest`: click a row, click a button, wheel scroll, dangerous confirm requires the exact name, disabled SSH remove.
+- [x] Shared keymap on every widget: `↑↓/jk`, `enter`, `esc`, `/` filter, `r` refresh, `a` add, `d` delete, `e` edit; screen keys listed in the status bar.
+- [x] Mouse hit-testing for rows and buttons (prefer lipgloss v2 native hit-testing if it exists, else bubblezone); `bubbles` components as the base.
+- [x] Lockout Guard refusals are never dialogs: disabled button + reason.
+- [x] `teatest`: click a row, click a button, wheel scroll, dangerous confirm requires the exact name, disabled SSH remove.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ 75ae7d3 (merge). Code-review fixes in aa00873.

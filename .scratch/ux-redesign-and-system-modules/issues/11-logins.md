@@ -4,8 +4,12 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Works on Ubuntu/Debian and Rocky/Alma log sources, including hosts without a syslog file (journal only).
-- [ ] No actions on this screen (no ban button).
-- [ ] Unit tests over fixture journal output for both families; `teatest` render and window toggle.
+- [x] Works on Ubuntu/Debian and Rocky/Alma log sources, including hosts without a syslog file (journal only).
+- [x] No actions on this screen (no ban button).
+- [x] Unit tests over fixture journal output for both families; `teatest` render and window toggle.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ c7340c7 (merge). Code-review fixes in aa00873.

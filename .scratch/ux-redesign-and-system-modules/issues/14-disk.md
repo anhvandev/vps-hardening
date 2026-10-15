@@ -4,8 +4,12 @@
 
 **Blocked by:** 02, 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] No arbitrary file or directory deletion anywhere on this screen.
-- [ ] The running kernel can never be selected for removal.
-- [ ] Unit tests with scripted df/du/journal/package output; `teatest`: cancel a scan, run a cleanup as a Task.
+- [x] No arbitrary file or directory deletion anywhere on this screen.
+- [x] The running kernel can never be selected for removal.
+- [x] Unit tests with scripted df/du/journal/package output; `teatest`: cancel a scan, run a cleanup as a Task.
+
+## Comments
+
+Resolved on `feat/ux-redesign` @ f9a1d8a (merge). Code-review fixes in aa00873.
