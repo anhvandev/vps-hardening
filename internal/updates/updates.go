@@ -128,7 +128,8 @@ func aptList(r system.Runner) ([]Package, error) {
 // dnfList is what `dnf upgrade` would install, with the installed versions
 // from rpm; security means named by a security advisory.
 func dnfList(r system.Runner) ([]Package, error) {
-	res, err := r.Run("dnf", "-q", "check-update")
+	// -C: from the metadata cache as it is, never downloading (see Refresh)
+	res, err := r.Run("dnf", "-q", "-C", "check-update")
 	if err == nil && res.Code != 0 && res.Code != 100 { // 100: updates pending
 		err = fmt.Errorf("exit %d: %s", res.Code, strings.TrimSpace(res.Stderr))
 	}
@@ -155,7 +156,7 @@ func dnfList(r system.Runner) ([]Package, error) {
 		}
 	}
 	sec := map[string]bool{}
-	out, err := run(r, "dnf", "-q", "updateinfo", "list", "--security")
+	out, err := run(r, "dnf", "-q", "-C", "updateinfo", "list", "--security")
 	if err != nil {
 		return nil, err
 	}
