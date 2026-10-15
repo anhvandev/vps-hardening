@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 // Result is what a finished command produced. A non-zero Code is not an error.
@@ -28,11 +29,23 @@ type Runner interface {
 // Exec runs real commands on the host, with LC_ALL=C so output is parseable.
 type Exec struct{}
 
-func (Exec) Run(name string, args ...string) (Result, error) {
+func (e Exec) Run(name string, args ...string) (Result, error) {
+	return e.RunLive(io.Discard, name, args...)
+}
+
+// LiveRunner is a Runner that can also copy a command's stdout and stderr to
+// w as they are written (a Task's live output). Runners that can implement
+// it next to Run.
+type LiveRunner interface {
+	RunLive(w io.Writer, name string, args ...string) (Result, error)
+}
+
+func (Exec) RunLive(w io.Writer, name string, args ...string) (Result, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	sw := &syncWriter{w: w} // stdout and stderr are copied by two goroutines
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(&stdout, sw), io.MultiWriter(&stderr, sw)
 	err := cmd.Run()
 	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
 	var exitErr *exec.ExitError
@@ -41,6 +54,17 @@ func (Exec) Run(name string, args ...string) (Result, error) {
 		return res, nil
 	}
 	return res, err
+}
+
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }
 
 // Streamer starts a long-running command (journalctl -f) and hands back its
