@@ -244,12 +244,17 @@ func logMutation(root, action string, do func() error) error {
 	}
 	defer lk.Close()
 	err = do()
+	appendLog(root, action, err)
+	return err
+}
+
+// appendLog appends action's action-log line under root: ok, or failed with err.
+func appendLog(root, action string, err error) {
 	result := "ok"
 	if err != nil {
 		result = "failed: " + err.Error()
 	}
 	actionlog.Append(filepath.Join(root, actionlog.LogPath), action, result) // failures to log are ignored
-	return err
 }
 
 // checkedRun is r.Run with a non-zero exit turned into an error.

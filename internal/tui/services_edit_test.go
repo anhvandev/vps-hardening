@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/service"
 	"github.com/anhvandev/vpsctl/internal/system"
 )
@@ -31,6 +32,35 @@ func readFile(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// lockBusy reports whether someone holds the global lock under h's root.
+func lockBusy(h *testHost) bool {
+	lk, err := actionlog.Lock(filepath.Join(h.root, actionlog.LockPath))
+	if err != nil {
+		return true
+	}
+	lk.Close()
+	return false
+}
+
+// A busy global lock refuses the edit before the editor opens.
+func TestServicesEditRefusedWhileLocked(t *testing.T) {
+	h := svcHost(t)
+	marker := filepath.Join(t.TempDir(), "ran")
+	t.Setenv("EDITOR", "touch "+marker)
+	lk, err := actionlog.Lock(filepath.Join(h.root, actionlog.LockPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lk.Close()
+	tm := openServices(t, h)
+	tm.Type("E")
+	waitFor(t, tm, "locked by ")
+	closeServices(t, tm)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("editor opened while the lock is held elsewhere")
+	}
 }
 
 func TestServicesEditOverride(t *testing.T) {
@@ -63,8 +93,14 @@ func TestServicesEditVerifyFailure(t *testing.T) {
 	tm := openServices(t, h)
 	tm.Type("E")
 	waitFor(t, tm, "enter re-edit · esc discard")
+	if !lockBusy(h) {
+		t.Error("global lock released while the edit is still open")
+	}
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	waitFor(t, tm, "discarded edit of cron.service")
+	if lockBusy(h) {
+		t.Error("global lock still held after discard")
+	}
 	if got := readFile(t, service.OverridePath(h.root, "cron.service")); got != "[Service]\nNice=1\n" {
 		t.Errorf("override after discard = %q", got)
 	}
@@ -77,6 +113,9 @@ func TestServicesEditVerifyFailure(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // re-edit
 	waitFor(t, tm, "override for cron.service applied")
 	closeServices(t, tm)
+	if lockBusy(h) {
+		t.Error("global lock still held after apply")
+	}
 	if got := readFile(t, service.OverridePath(h.root, "cron.service")); got != "[Service]\nNice=5\n" {
 		t.Errorf("override after re-edit = %q", got)
 	}

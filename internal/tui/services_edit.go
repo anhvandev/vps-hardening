@@ -4,10 +4,12 @@ import (
 	"cmp"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/service"
 )
@@ -15,8 +17,10 @@ import (
 // unitEdit is an edit of the unit file or drop-in at path, made in $EDITOR on
 // a temp copy and applied with service.Apply (verify, then reload). After a
 // failed apply the copy is kept so the operator can re-edit or discard it.
+// The global lock is held from before the editor opens until close.
 type unitEdit struct {
 	unit, path string
+	lock       *os.File
 	tmp        string // the copy the editor works on
 	orig       string // path's content (or template) before editing
 	failed     bool   // the last apply failed: enter re-edits, esc discards
@@ -31,23 +35,30 @@ type (
 	}
 )
 
-// newUnitEdit copies path's content, or template if it has none, to a temp
-// file for the editor.
-func newUnitEdit(unit, path, template string) (*unitEdit, error) {
+// newUnitEdit takes the global lock under root and copies path's content, or
+// template if it has none, to a temp file for the editor. A busy lock returns
+// its holder.
+func newUnitEdit(root, unit, path, template string) (*unitEdit, error) {
+	lk, err := actionlog.Lock(filepath.Join(root, actionlog.LockPath))
+	if err != nil {
+		return nil, err
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		b = []byte(template)
 	}
 	f, err := os.CreateTemp("", "vpsctl-*-"+unit)
 	if err != nil {
+		lk.Close()
 		return nil, err
 	}
 	defer f.Close()
 	if _, err := f.Write(b); err != nil {
 		os.Remove(f.Name())
+		lk.Close()
 		return nil, err
 	}
-	return &unitEdit{unit: unit, path: path, tmp: f.Name(), orig: string(b)}, nil
+	return &unitEdit{unit: unit, path: path, lock: lk, tmp: f.Name(), orig: string(b)}, nil
 }
 
 // open hands the terminal to $EDITOR (nano if unset) on the temp copy.
@@ -55,6 +66,12 @@ func (e *unitEdit) open() tea.Cmd {
 	args := strings.Fields(cmp.Or(os.Getenv("EDITOR"), "nano"))
 	c := exec.Command(args[0], append(args[1:], e.tmp)...)
 	return tea.ExecProcess(c, func(err error) tea.Msg { return editedMsg{err} })
+}
+
+// close ends the edit: drops the temp copy and releases the global lock.
+func (e *unitEdit) close() {
+	os.Remove(e.tmp)
+	e.lock.Close()
 }
 
 // editUpdate runs the override edit/revert keys and messages; ok is false for
@@ -71,13 +88,13 @@ func (s servicesScreen) editUpdate(msg tea.Msg) (_ servicesScreen, _ tea.Cmd, ok
 		default:
 			return s, s.applyEdit(content), true
 		}
-		os.Remove(s.edit.tmp)
+		s.edit.close()
 		s.edit = nil
 		return s, nil, true
 	case appliedMsg:
 		s.list, s.err, s.status = msg.list, msg.err, msg.status
 		if msg.ok {
-			os.Remove(s.edit.tmp)
+			s.edit.close()
 			s.edit = nil
 		} else {
 			s.edit.failed = true
@@ -92,7 +109,7 @@ func (s servicesScreen) editUpdate(msg tea.Msg) (_ servicesScreen, _ tea.Cmd, ok
 			case "enter":
 				return s, s.edit.open(), true
 			case "esc":
-				os.Remove(s.edit.tmp)
+				s.edit.close()
 				s.status, s.edit = "discarded edit of "+s.edit.unit, nil
 				return s, nil, true
 			}
@@ -103,7 +120,7 @@ func (s servicesScreen) editUpdate(msg tea.Msg) (_ servicesScreen, _ tea.Cmd, ok
 				s.status = err.Error()
 				return s, nil, true
 			}
-			e, err := newUnitEdit(unit, service.OverridePath(s.m.Root, unit),
+			e, err := newUnitEdit(s.m.Root, unit, service.OverridePath(s.m.Root, unit),
 				"# Override for "+unit+": settings here replace the vendor unit's.\n[Service]\n")
 			if err != nil {
 				s.status = err.Error()
@@ -134,16 +151,13 @@ func (s servicesScreen) revert(unit string) tea.Cmd {
 	}
 }
 
-// applyEdit applies content as the edit's file under logMutation, then
-// re-reads the Services.
+// applyEdit applies content as the edit's file (under the edit's lock) and
+// logs the result, then re-reads the Services.
 func (s servicesScreen) applyEdit(content []byte) tea.Cmd {
 	e := s.edit
 	return func() tea.Msg {
-		// ponytail: the lock covers the apply, not the editor session; two
-		// operators editing the same unit at once means the last apply wins.
-		err := logMutation(s.m.Root, "service edit "+e.unit, func() error {
-			return service.Apply(s.m.R, e.path, e.unit, content)
-		})
+		err := service.Apply(s.m.R, e.path, e.unit, content)
+		appendLog(s.m.Root, "service edit "+e.unit, err)
 		list, lerr := service.List(s.m.R)
 		status := "override for " + e.unit + " applied, systemd reloaded"
 		if err != nil {
