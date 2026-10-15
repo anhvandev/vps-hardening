@@ -11,9 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
+	"github.com/anhvandev/vpsctl/internal/tui"
 )
 
 // version is set at build time: -ldflags "-X main.version=v1.2.3".
@@ -24,14 +27,14 @@ const logDir = "/var/log/vpsctl"
 // lock takes the shared global mutation lock.
 var lock = actionlog.Lock
 
-const usage = `usage: vpsctl harden --user NAME [--port N] [--yes] [--key-out PATH] [--rotate-key]
+const usage = `usage: vpsctl                 (management TUI)
+       vpsctl harden --user NAME [--port N] [--yes] [--key-out PATH] [--rotate-key]
                      [--skip-firewall] [--skip-fail2ban] [--skip-updates] [--skip-sysctl]
        vpsctl version`
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("vpsctl: TUI not implemented yet; use `vpsctl harden`")
-		return
+		os.Exit(runTUI())
 	}
 	switch os.Args[1] {
 	case "version":
@@ -42,6 +45,25 @@ func main() {
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
+}
+
+// runTUI opens the management TUI after the root + systemd preflight.
+func runTUI() int {
+	if err := system.Preflight(os.Geteuid(), "/run/systemd/system"); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	h, err := system.Detect(system.Exec{}, "/etc/os-release")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	m := harden.NewMachine(system.Exec{}, h, "", io.Discard)
+	if _, err := tea.NewProgram(tui.New(m)).Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR:", err)
+		return 1
+	}
+	return 0
 }
 
 // runHarden returns the exit code: 0 ok, 1 error, 2 usage, 3 stopped at the Verify Gate.
