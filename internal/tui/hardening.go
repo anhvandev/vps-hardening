@@ -103,9 +103,7 @@ func (h hardening) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			f.on = !f.on
 		}
 	case k == "backspace":
-		if r := []rune(f.value); len(r) > 0 {
-			f.value = string(r[:len(r)-1])
-		}
+		f.value = dropLast(f.value)
 	default:
 		f.value += msg.Text
 	}

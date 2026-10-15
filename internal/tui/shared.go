@@ -48,6 +48,14 @@ func appendLog(root, action string, err error) {
 	actionlog.Append(filepath.Join(root, actionlog.LogPath), action, result) // failures to log are ignored
 }
 
+// dropLast is s without its last rune: backspace in a text field.
+func dropLast(s string) string {
+	if r := []rune(s); len(r) > 0 {
+		return string(r[:len(r)-1])
+	}
+	return s
+}
+
 // sessionIP is the client IP of the operator's SSH session, "" when not
 // found, e.g. on the provider console.
 func sessionIP(root string) string {

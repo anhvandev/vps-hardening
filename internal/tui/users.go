@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -10,6 +9,7 @@ import (
 
 	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
+	"github.com/anhvandev/vpsctl/internal/system"
 	"github.com/anhvandev/vpsctl/internal/user"
 )
 
@@ -191,7 +191,7 @@ func (u users) guarded(verb, name, done string, do func() error) tea.Cmd {
 		if err != nil {
 			return err
 		}
-		if err := guard.Check(guard.Facts{SessionUser: os.Getenv("SUDO_USER"), Users: list}, guard.UserAction{User: name, Verb: verb}); err != nil {
+		if err := guard.Check(guard.Facts{SessionUser: system.SessionUser(), Users: list}, guard.UserAction{User: name, Verb: verb}); err != nil {
 			return err
 		}
 		return do()
@@ -204,9 +204,7 @@ func (u users) askKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		u.ask = usersAsk{}
 	case "backspace":
-		if r := []rune(u.ask.input); len(r) > 0 {
-			u.ask.input = string(r[:len(r)-1])
-		}
+		u.ask.input = dropLast(u.ask.input)
 	case "enter":
 		ask := u.ask
 		u.ask = usersAsk{}
@@ -252,7 +250,7 @@ func (u users) View() tea.View {
 		b.WriteString("no Managed Users")
 	default:
 		fmt.Fprintf(&b, "  %-12s %-5s %-5s %s", "NAME", "SUDO", "KEYS", "LOCKED")
-		me := os.Getenv("SUDO_USER")
+		me := system.SessionUser()
 		for i, mu := range u.list {
 			cur := "  "
 			if i == u.cursor {

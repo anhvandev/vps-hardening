@@ -91,9 +91,7 @@ func (f firewallScreen) promptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		f.adding, f.status = false, ""
 	case "backspace":
-		if r := []rune(f.input); len(r) > 0 {
-			f.input = string(r[:len(r)-1])
-		}
+		f.input = dropLast(f.input)
 	case "enter":
 		r, err := parseRule(f.input)
 		if err != nil {

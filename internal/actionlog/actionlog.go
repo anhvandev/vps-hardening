@@ -3,6 +3,7 @@
 package actionlog
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/anhvandev/vpsctl/internal/system"
 )
 
 const (
@@ -53,9 +56,4 @@ func Append(path, action, result string) error {
 }
 
 // operator is the real login name behind sudo, else root.
-func operator() string {
-	if u := os.Getenv("SUDO_USER"); u != "" {
-		return u
-	}
-	return "root"
-}
+func operator() string { return cmp.Or(system.SessionUser(), "root") }

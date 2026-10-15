@@ -99,9 +99,7 @@ func (s timersScreen) formKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "up":
 		s.field = (s.field + len(s.form) - 1) % len(s.form)
 	case "backspace":
-		if r := []rune(s.form[s.field]); len(r) > 0 {
-			s.form[s.field] = string(r[:len(r)-1])
-		}
+		s.form[s.field] = dropLast(s.form[s.field])
 	case "enter":
 		return s, s.create(service.TimerSpec{Name: s.form[0], Schedule: s.form[1], Service: s.form[2]})
 	default:

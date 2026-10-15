@@ -90,9 +90,7 @@ func (s servicesScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "esc", "enter":
 				s.filtering = false
 			case "backspace":
-				if r := []rune(s.filter); len(r) > 0 {
-					s.filter = string(r[:len(r)-1])
-				}
+				s.filter = dropLast(s.filter)
 			default:
 				s.filter += msg.Text
 			}

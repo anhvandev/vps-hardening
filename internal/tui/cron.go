@@ -89,9 +89,7 @@ func (c cronScreen) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			c.mode, c.input, c.status = "", "", ""
 		case "backspace":
-			if c.input != "" {
-				c.input = c.input[:len(c.input)-1]
-			}
+			c.input = dropLast(c.input)
 		case "enter":
 			if err := cron.Validate(c.input); err != nil {
 				c.status = err.Error()

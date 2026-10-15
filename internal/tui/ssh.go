@@ -112,9 +112,7 @@ func (s sshScreen) promptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		s.editing, s.askFor, s.status = false, 0, ""
 	case "backspace":
-		if r := []rune(s.input); len(r) > 0 {
-			s.input = string(r[:len(r)-1])
-		}
+		s.input = dropLast(s.input)
 	case "enter":
 		if s.askFor != 0 {
 			name := strings.TrimSpace(s.input)

@@ -83,9 +83,7 @@ func (f f2bScreen) editKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		f.editing = false
 	case "backspace":
-		if r := []rune(f.input); len(r) > 0 {
-			f.input = string(r[:len(r)-1])
-		}
+		f.input = dropLast(f.input)
 	case "enter":
 		entry := strings.TrimSpace(f.input)
 		if !fail2ban.ValidIgnore(entry) {

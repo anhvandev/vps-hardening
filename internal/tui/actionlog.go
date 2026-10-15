@@ -70,9 +70,7 @@ func (a actionLogView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc":
 			return a, Back
 		case "backspace":
-			if a.filter != "" {
-				a.filter = a.filter[:len(a.filter)-1]
-			}
+			a.filter = dropLast(a.filter)
 		default:
 			a.filter += msg.Text
 		}
