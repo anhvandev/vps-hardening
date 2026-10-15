@@ -18,7 +18,8 @@ const serviceRows = 20
 
 // servicesScreen lists Services read live: running, enabled or failed ones by
 // default, all with a; / types a name filter. s/x/r/e/d start, stop, restart,
-// enable and disable the selected Service (Protected Units refused).
+// enable and disable the selected Service (Protected Units refused); E edits
+// its override in $EDITOR, U reverts it (services_edit.go).
 type servicesScreen struct {
 	m         *harden.Machine
 	loaded    bool
@@ -29,6 +30,7 @@ type servicesScreen struct {
 	filtering bool // typing into the filter
 	cursor    int  // index into shown()
 	status    string
+	edit      *unitEdit // override being edited, nil if none
 }
 
 // servicesMsg is one read of the Services, plus the outcome of the last action.
@@ -68,6 +70,9 @@ var actionKeys = map[string][2]string{
 }
 
 func (s servicesScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if s, cmd, ok := s.editUpdate(msg); ok {
+		return s, cmd
+	}
 	switch msg := msg.(type) {
 	case servicesMsg:
 		s.list, s.err, s.status, s.loaded = msg.list, msg.err, msg.status, true
@@ -167,7 +172,7 @@ func (s servicesScreen) View() tea.View {
 			fmt.Fprintf(&b, "%s\n", dimStyle.Render(fmt.Sprintf("%d of %d", s.cursor+1, len(shown))))
 		}
 	}
-	b.WriteString("\n\n" + dimStyle.Render("s start · x stop · r restart · e enable · d disable · a all · / filter") + "\n")
+	b.WriteString("\n\n" + dimStyle.Render("s start · x stop · r restart · e enable · d disable · E edit · U revert · a all · / filter") + "\n")
 	if s.status != "" {
 		b.WriteString("\n" + s.status)
 	}
