@@ -21,6 +21,10 @@ type ManagedUser struct {
 	Locked     bool // password locked, account expired or nologin shell
 }
 
+// Usable: u is an Admin User the operator can log in as and escalate with
+// (sudo + key + unlocked).
+func (u ManagedUser) Usable() bool { return u.Sudo && u.Keys > 0 && !u.Locked }
+
 // ManagedUsers lists the human accounts (1000 ≤ UID < 65534) in passwd order,
 // read live from the passwd, group and shadow databases.
 func (m *Manager) ManagedUsers() ([]ManagedUser, error) {

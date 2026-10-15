@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -14,6 +14,8 @@ import (
 	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/sshd"
+	"github.com/anhvandev/vpsctl/internal/system"
+	"github.com/anhvandev/vpsctl/internal/user"
 )
 
 func init() { screens["SSH"] = newSSH }
@@ -26,9 +28,11 @@ var warnStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("3"))
 type sshScreen struct {
 	m       *harden.Machine
 	info    *sshInfo // nil while loading
-	editing bool     // the new-port prompt is up
+	editing bool     // a prompt is up: the new port, or the login user if askFor is set
 	input   string
+	askFor  int         // new port waiting for the login-user answer (no SUDO_USER)
 	port    int         // port being changed to; 0 = no change running
+	user    string      // login user to try at the Verify Gate
 	gate    *verifyGate // non-nil while the change waits at the Verify Gate
 	status  string      // outcome of the last change, or an input error
 }
@@ -67,7 +71,7 @@ func (s sshScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s.info = msg
 	case gateMsg:
 		if msg.ask != nil {
-			g := newVerifyGate(msg, s.m.Root, s.port, os.Getenv("SUDO_USER"))
+			g := newVerifyGate(msg, s.m.Root, s.port, s.user)
 			s.gate = &g
 			return s, nil
 		}
@@ -100,30 +104,50 @@ func (s sshScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return s, nil
 }
 
-// promptKey edits the new-port prompt; enter validates, then starts the change.
+// promptKey edits the prompt; enter validates, then starts the change. Without
+// SUDO_USER (root on the console) it first asks the login user to try at the
+// Verify Gate, suggesting the first usable Admin User.
 func (s sshScreen) promptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		s.editing, s.status = false, ""
+		s.editing, s.askFor, s.status = false, 0, ""
 	case "backspace":
 		if r := []rune(s.input); len(r) > 0 {
 			s.input = string(r[:len(r)-1])
 		}
 	case "enter":
+		if s.askFor != 0 {
+			name := strings.TrimSpace(s.input)
+			users, _ := s.m.ManagedUsers()
+			if !slices.ContainsFunc(users, func(u user.ManagedUser) bool { return u.Name == name }) {
+				s.status = "not a Managed User: enter the Admin User to log in as"
+				return s, nil
+			}
+			return s.start(s.askFor, name)
+		}
 		port, err := strconv.Atoi(strings.TrimSpace(s.input))
 		switch {
 		case err != nil || port < 1 || port > 65535:
 			s.status = "port must be 1-65535"
-		case os.Getenv("SUDO_USER") == "":
-			s.status = "run vpsctl with sudo as your Admin User: the Verify Gate needs one to log in as"
+		case system.SessionUser() == "":
+			s.askFor, s.input, s.status = port, "", ""
+			users, _ := s.m.ManagedUsers()
+			if i := slices.IndexFunc(users, user.ManagedUser.Usable); i >= 0 {
+				s.input = users[i].Name
+			}
 		default:
-			s.editing, s.status, s.port = false, "", port
-			return s, s.changePort(port, os.Getenv("SUDO_USER"))
+			return s.start(port, system.SessionUser())
 		}
 	default:
 		s.input += msg.Text
 	}
 	return s, nil
+}
+
+// start closes the prompt and changes the port, user logging in at the gate.
+func (s sshScreen) start(port int, user string) (tea.Model, tea.Cmd) {
+	s.editing, s.askFor, s.status, s.port, s.user = false, 0, "", port, user
+	return s, s.changePort(port, user)
 }
 
 // changePort moves SSH to port with the two-stage change, the Verify Gate
@@ -189,6 +213,9 @@ func (s sshScreen) View() tea.View {
 	}
 	b.WriteString("\n\n")
 	switch {
+	case s.editing && s.askFor != 0:
+		b.WriteString("No SUDO_USER: which Admin User will you log in as?\nLogin user for the Verify Gate: " + s.input + "█\n" +
+			dimStyle.Render("enter change (with the Verify Gate) · esc cancel"))
 	case s.editing:
 		b.WriteString("New SSH port: " + s.input + "█\n" + dimStyle.Render("enter change (with the Verify Gate) · esc cancel"))
 	case s.port != 0:

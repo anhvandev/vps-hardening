@@ -36,7 +36,7 @@ func keepUsableAdmin(f Facts, action any) error {
 		return nil
 	}
 	i := slices.IndexFunc(f.Users, func(u user.ManagedUser) bool { return u.Name == a.User })
-	if i < 0 || !usable(f.Users[i]) {
+	if i < 0 || !f.Users[i].Usable() {
 		return nil
 	}
 	after := f.Users[i]
@@ -50,10 +50,8 @@ func keepUsableAdmin(f Facts, action any) error {
 	case "delete":
 		after.Keys = 0
 	}
-	if usable(after) || slices.ContainsFunc(f.Users, func(u user.ManagedUser) bool { return u.Name != a.User && usable(u) }) {
+	if after.Usable() || slices.ContainsFunc(f.Users, func(u user.ManagedUser) bool { return u.Name != a.User && u.Usable() }) {
 		return nil
 	}
 	return fmt.Errorf("refused: %s is the last usable Admin User (sudo + key + unlocked)", a.User)
 }
-
-func usable(u user.ManagedUser) bool { return u.Sudo && u.Keys > 0 && !u.Locked }

@@ -22,6 +22,10 @@ type Host struct {
 	PkgManager string // "apt", "dnf", or "" when unknown
 }
 
+// SessionUser is the operator: the login user behind sudo (SUDO_USER), ""
+// when root logged in directly (e.g. on the provider console).
+func SessionUser() string { return os.Getenv("SUDO_USER") }
+
 // supported maps os-release ID to supported VERSION_IDs (major only on RHEL-likes).
 var supported = map[string][]string{
 	"ubuntu":    {"22.04", "24.04"},

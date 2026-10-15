@@ -179,6 +179,47 @@ func TestSSHPortChangeRefusedWhenNotHardened(t *testing.T) {
 	}
 }
 
+// Root on the provider console has no SUDO_USER: the port change asks for the
+// login user to try at the Verify Gate, defaulting to the first usable Admin
+// User (carol has no key, alice does).
+func TestSSHPortChangeWithoutSudoUserAsksLoginUser(t *testing.T) {
+	h, sim := portChangeHost(t)
+	t.Setenv("SUDO_USER", "")
+	h.fake.Results["getent passwd"] = system.Result{Stdout: "carol:x:1000:1000::/home/carol:/bin/bash\nalice:x:1001:1001::/home/alice:/bin/bash\n"}
+	h.fake.Results["getent group"] = system.Result{Stdout: "sudo:x:27:carol,alice\n"}
+	h.fake.Results["getent shadow"] = system.Result{Stdout: "carol:!:19000:0:99999:7:::\nalice:!:19000:0:99999:7:::\n"}
+	tm := changePort(t, h, sim, "2222")
+	waitFor(t, tm, "Login user for the Verify Gate: alice")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "ssh -p 2222 alice@10.0.0.2")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // Stop safely
+	waitFor(t, tm, "restored pre-run SSH state")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+}
+
+// A login user that is not a Managed User is refused before anything runs.
+func TestSSHPortChangeLoginUserMustBeManaged(t *testing.T) {
+	h, sim := portChangeHost(t)
+	t.Setenv("SUDO_USER", "")
+	tm := changePort(t, h, sim, "2222")
+	waitFor(t, tm, "Login user for the Verify Gate")
+	for range 10 {
+		tm.Send(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	tm.Type("mallory")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "not a Managed User")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+	if h.actionLog() != "" {
+		t.Errorf("action log %q", h.actionLog())
+	}
+}
+
 var ctrlC = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 
 // ctrl+c at the Verify Gate is "Stop safely": the change is restored and the
