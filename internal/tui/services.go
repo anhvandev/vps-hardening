@@ -104,6 +104,9 @@ func (s servicesScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return s, nil
 	case refreshMsg:
 		return s, s.reload()
+	case openMsg: // Overview links to a failed Service
+		s.pick = msg.item
+		return s, nil
 	case taskDoneMsg:
 		return s.taskDone()
 	case tea.MouseClickMsg:

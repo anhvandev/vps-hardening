@@ -395,7 +395,7 @@ func TestFirewallWheelScrolls(t *testing.T) {
 	h.fake.Results["ss -Hltunp"] = ssOut
 	h.write("/run/.keep", "")
 	tm := start(h)
-	waitFor(t, tm, "1033/tcp") // the Overview lists them: RAM falls off the screen
+	waitFor(t, tm, "Uptime")
 	tm.Type(menuTo("Firewall"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "LISTENING")

@@ -60,6 +60,8 @@ func (l loginsScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			l.table.setRows(l.rows())
 		}
 		return l, nil
+	case refreshMsg:
+		return l, l.Init()
 	case tea.MouseClickMsg:
 		if m := mouse(l.layout(), msg); m != nil {
 			return l.Update(m)

@@ -109,7 +109,7 @@ func TestDockerMenuItemOnlyWithDocker(t *testing.T) {
 	tm := start(debianHost(t))
 	waitFor(t, tm, "RAM")
 	v := quitView(t, tm)
-	wantAll(t, v, "Docker     not installed")
+	wantAll(t, v, "Docker      not installed")
 	if strings.Contains(v, "│   Docker ") {
 		t.Errorf("Docker in the menu without Docker:\n%s", v)
 	}
@@ -117,7 +117,7 @@ func TestDockerMenuItemOnlyWithDocker(t *testing.T) {
 	tm = start(dockerHost(t))
 	waitFor(t, tm, "RAM")
 	v = quitView(t, tm)
-	wantAll(t, v, "│   Docker ", "Docker     3 containers · ⚠ 1 Published Port bypassing the firewall")
+	wantAll(t, v, "│   Docker ", "Docker      ⚠ 1 Published Port")
 }
 
 // openDocker starts the TUI on h and focuses the loaded Docker screen.
