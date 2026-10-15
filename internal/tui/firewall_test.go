@@ -81,6 +81,29 @@ func TestFirewallProtolessUfwRule(t *testing.T) {
 	wantRule(t, v, "1000-2000", "any", "anywhere", "no")
 }
 
+// A missing or stopped firewall, or a missing ss, is a state, not a failure.
+func TestFirewallStates(t *testing.T) {
+	h := debianHost(t)
+	h.fake.Results["ufw status"] = system.Result{Stdout: "Status: inactive\n"}
+	v := firewallView(h) // no ss scripted
+	wantAll(t, v, "ufw inactive")
+	wantRule(t, v, "80", "tcp", "anywhere", "unknown")
+
+	delete(h.fake.Results, "ufw status")
+	wantAll(t, firewallView(h), "ufw not installed")
+
+	h.host = system.Host{DistroID: "rocky", Version: "9.4", Family: "rhel"}
+	h.fake.Results = map[string]system.Result{
+		"firewall-cmd --state":                  {Code: 252, Stdout: "not running\n"},
+		"firewall-cmd --permanent --list-ports": {Code: 252, Stderr: "FirewallD is not running\n"},
+	}
+	v = firewallView(h)
+	wantAll(t, v, "firewalld inactive")
+	if strings.Contains(v, "unreadable") || strings.Contains(v, "Listening") {
+		t.Errorf("stopped firewalld shows an error or table:\n%s", v)
+	}
+}
+
 // The table renders inside the shell, and esc hands focus back to the menu.
 func TestFirewallScreenFlow(t *testing.T) {
 	h := debianHost(t)
