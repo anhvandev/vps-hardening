@@ -14,7 +14,8 @@ type fakeHost struct {
 	calls     []string
 	fail      map[string]bool
 	plan      Plan
-	waitSaved bool // last InstallKey waitSaved
+	waitSaved bool    // last InstallKey waitSaved
+	record    *Record // the saved Hardening Record
 }
 
 func newHost() *fakeHost {
@@ -41,6 +42,7 @@ func (h *fakeHost) BlockCloudInitReinjection() error { return h.step("cloudinit"
 func (h *fakeHost) Fail2ban(int) error               { return h.step("fail2ban") }
 func (h *fakeHost) AutoUpdates() error               { return h.step("updates") }
 func (h *fakeHost) Sysctl() error                    { return h.step("sysctl") }
+func (h *fakeHost) SaveRecord(r Record) error        { h.record = &r; return nil }
 func (h *fakeHost) EnsureFirewall(int) (firewall.Backend, error) {
 	return nil, h.step("firewall")
 }
@@ -133,6 +135,39 @@ func TestSkipFlagsAndOptionalStepFailuresAreNotFatal(t *testing.T) {
 	}
 	if slices.Contains(h.calls, "firewall") || slices.Contains(h.calls, "updates") {
 		t.Fatalf("skipped steps ran: %v", h.calls)
+	}
+}
+
+// A run records who ran it, the Admin User, the steps the operator skipped
+// and the ones it applied; an optional step that failed is not applied.
+func TestRunSavesHardeningRecord(t *testing.T) {
+	t.Setenv("SUDO_USER", "anh")
+	h := newHost()
+	h.fail["fail2ban"] = true
+	o := Options{User: "alice", Yes: true, SkipFirewall: true, SkipUpdates: true}
+	if err := Run(o, h, io.Discard, nil); err != nil {
+		t.Fatal(err)
+	}
+	r := h.record
+	if r == nil || r.Admin != "alice" || r.By != "anh" || r.Ran.IsZero() || !slices.Equal(r.Skipped, []string{"firewall", "updates"}) {
+		t.Fatalf("record = %+v", r)
+	}
+	var applied []string
+	for id := range r.Applied {
+		applied = append(applied, id)
+	}
+	slices.Sort(applied)
+	if want := []string{"admin", "cloud-init", "cloud-users", "port", "ssh", "sysctl"}; !slices.Equal(applied, want) {
+		t.Errorf("applied %v, want %v", applied, want)
+	}
+}
+
+// A run that stops at the Verify Gate hardened nothing: no Record.
+func TestStoppedRunSavesNoRecord(t *testing.T) {
+	h := newHost()
+	Run(Options{User: "alice"}, h, io.Discard, func(string) (bool, error) { return false, nil })
+	if h.record != nil {
+		t.Errorf("record saved: %+v", h.record)
 	}
 }
 

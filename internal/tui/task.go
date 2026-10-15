@@ -39,6 +39,10 @@ type taskStep struct {
 type startTaskMsg struct {
 	name, action, summary string
 	steps                 []taskStep
+	// logFirst: the last step may end the machine (reboot), so the Task
+	// History entry is written, as ok, before it runs; it fails into a
+	// second entry.
+	logFirst bool
 }
 
 // runTask is the command a screen returns to run a Task named name, recorded
@@ -46,7 +50,7 @@ type startTaskMsg struct {
 // order; the first error fails the Task. A Task already running, here or in
 // another session (global lock), refuses it: nothing runs or is recorded.
 func runTask(name, action, summary string, steps ...taskStep) tea.Cmd {
-	return func() tea.Msg { return startTaskMsg{name, action, summary, steps} }
+	return func() tea.Msg { return startTaskMsg{name: name, action: action, summary: summary, steps: steps} }
 }
 
 // taskDoneMsg goes to the open screen when a Task ends.
@@ -111,9 +115,14 @@ func (s startTaskMsg) run(root string, r system.Runner, lk *os.File, at time.Tim
 	out := &lineWriter{file: file, ch: ch}
 	var err error
 	result := "Done: " + s.summary
+	logged := false
 	for i, st := range s.steps {
 		ch <- taskStepMsg(i)
 		fmt.Fprintf(file, "[step %d/%d] %s\n", i+1, len(s.steps), st.name)
+		if s.logFirst && i == len(s.steps)-1 {
+			actionlog.AppendAt(filepath.Join(root, actionlog.LogPath), at, s.action, logResult(nil))
+			logged = true
+		}
 		if err = st.do(teeRunner{r, out}, out); err != nil {
 			out.flush()
 			result = fmt.Sprintf("step %d/%d %q %s", i+1, len(s.steps), st.name, logResult(err))
@@ -122,7 +131,9 @@ func (s startTaskMsg) run(root string, r system.Runner, lk *os.File, at time.Tim
 		out.flush()
 	}
 	fmt.Fprintln(file, result)
-	actionlog.AppendAt(filepath.Join(root, actionlog.LogPath), at, s.action, logResult(err)) // failures to log are ignored
+	if !logged || err != nil {
+		actionlog.AppendAt(filepath.Join(root, actionlog.LogPath), at, s.action, logResult(err)) // failures to log are ignored
+	}
 	lk.Close()
 	ch <- taskEndMsg{err}
 }
@@ -160,27 +171,38 @@ func (w *lineWriter) flush() {
 	}
 }
 
-// teeRunner records each command line, its output and a non-zero exit in out.
+// teeRunner records each command line, its output (as it is written when the
+// Runner can) and a non-zero exit in out.
 type teeRunner struct {
 	system.Runner
-	out io.Writer
+	out *lineWriter
 }
 
 func (t teeRunner) Run(name string, args ...string) (system.Result, error) {
 	fmt.Fprintln(t.out, "$", strings.Join(append([]string{name}, args...), " "))
+	if l, ok := t.Runner.(system.LiveRunner); ok {
+		res, err := l.RunLive(t.out, name, args...)
+		t.out.flush() // an unterminated last line
+		return res, t.exit(res, err)
+	}
 	res, err := t.Runner.Run(name, args...)
 	for _, s := range []string{res.Stdout, res.Stderr} {
 		if s = strings.TrimRight(s, "\n"); s != "" {
 			fmt.Fprintln(t.out, s)
 		}
 	}
+	return res, t.exit(res, err)
+}
+
+// exit records a command's failure to run or non-zero exit; it returns err.
+func (t teeRunner) exit(res system.Result, err error) error {
 	switch {
 	case err != nil:
 		fmt.Fprintln(t.out, err)
 	case res.Code != 0:
 		fmt.Fprintf(t.out, "exit %d\n", res.Code)
 	}
-	return res, err
+	return err
 }
 
 // running reports whether a Task is running.
@@ -196,7 +218,8 @@ func (t Model) taskUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		k.lines = append(k.lines, string(msg))
 	case taskEndMsg:
 		k.ended, k.err, k.end = true, msg.err, time.Now()
-		t.busyNote, t.hardened = false, t.m.SSH.StageBLive()
+		t.busyNote = false
+		t.readHardening()
 		var cmd tea.Cmd
 		t.screen, cmd = t.screen.Update(taskDoneMsg{})
 		return t, cmd
