@@ -177,24 +177,29 @@ func readRAM(root string) (used, total float64) {
 	return kb["MemTotal"] - kb["MemAvailable"], kb["MemTotal"]
 }
 
-// updates: pending security and other updates, the last automatic run, reboot.
-// ponytail: lists the updates (apt-get -s / dnf check-update) on every refresh;
-// read them less often if that load shows on small machines.
-func (o overview) updates(now time.Time) card {
+// updatesEvery is how often the Overview lists the pending updates (a
+// simulated upgrade, heavy on a small machine); the rest refreshes every 5 s.
+const updatesEvery = 10 * time.Minute
+
+// updates: pending security and other updates, the last automatic run,
+// reboot. pending is the pending line as last listed, "" to list it now.
+func (o overview) updates(now time.Time, pending string) (card, string) {
 	m := o.m
-	pending := "pending updates unknown"
-	if ps, err := updates.List(m.R, m.Host.PkgManager); err == nil {
-		sec := 0
-		for _, p := range ps {
-			if p.Security {
-				sec++
+	if pending == "" {
+		pending = "pending updates unknown"
+		if ps, err := updates.List(m.R, m.Host.PkgManager); err == nil {
+			sec := 0
+			for _, p := range ps {
+				if p.Security {
+					sec++
+				}
 			}
-		}
-		pending = fmt.Sprintf("%d security · %d other pending", sec, len(ps)-sec)
-		if sec > 0 {
-			pending = warnText(pending)
-		} else {
-			pending = okText(pending)
+			pending = fmt.Sprintf("%d security · %d other pending", sec, len(ps)-sec)
+			if sec > 0 {
+				pending = warnText(pending)
+			} else {
+				pending = okText(pending)
+			}
 		}
 	}
 
@@ -219,7 +224,7 @@ func (o overview) updates(now time.Time) card {
 	case !known:
 		reboot = "reboot unknown"
 	}
-	return card{"Updates", openMsg{title: "Updates"}, []cardLine{{pending, openMsg{}}, {last, openMsg{}}, {reboot, openMsg{}}}}
+	return card{"Updates", openMsg{title: "Updates"}, []cardLine{{pending, openMsg{}}, {last, openMsg{}}, {reboot, openMsg{}}}}, pending
 }
 
 // failedShown bounds the failed Services named one per line.

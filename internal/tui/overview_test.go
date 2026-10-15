@@ -87,6 +87,26 @@ func TestOverviewLoginsOpensLogins(t *testing.T) {
 	ctrlCView(t, tm)
 }
 
+// Pending updates are listed on open and then only every 10 minutes; the
+// other cards still refresh every 5 s.
+func TestOverviewListsUpdatesEvery10Minutes(t *testing.T) {
+	h := overviewHost(t)
+	tm := start(h)
+	waitFor(t, tm, "Uptime")
+	h.fake.Results["apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade"] = system.Result{Stdout: ""}
+	units := "systemctl list-units --type=service --all --plain --no-legend --no-pager"
+	for i, name := range []string{"worker", "zebra"} { // a new failed Service each refresh shows it ran
+		h.fake.Results[units] = system.Result{Stdout: name + ".service  loaded failed   failed  x\n"}
+		tm.Send(tickMsg{now: time.Now().Add([]time.Duration{refreshEvery + time.Second, 11 * time.Minute}[i])})
+		waitFor(t, tm, name)
+	}
+	v := quitView(t, tm)
+	wantAll(t, v, "0 security · 0 other pending")
+	if n := strings.Count(strings.Join(h.fake.Calls, "\n"), "apt-get -s"); n != 2 {
+		t.Errorf("listed updates %d times, want 2 (open, after 10 min)", n)
+	}
+}
+
 // The shell's tick moves "refreshed Ns ago".
 func TestOverviewRefreshedAgo(t *testing.T) {
 	tm := start(overviewHost(t))
