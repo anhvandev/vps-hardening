@@ -71,24 +71,34 @@ func lockCloudUsers(m, tm *harden.Machine) error {
 	return err
 }
 
-// readHardening re-reads the Hardening Status behind the header badge: SSH
-// key-only, and steps Done of those not Skipped.
-// ponytail: runs every step check (~10 commands) inside Update; move it to a
-// Cmd once the test Runners are safe for concurrent use.
-func (t *Model) readHardening() {
-	rec, _ := harden.LoadRecord(t.m.Root)
-	t.done, t.chosen = 0, 0
-	for _, s := range t.m.Status(rec) {
+// badgeMsg is the Hardening Status behind the header badge: SSH key-only,
+// and steps Done of those not Skipped.
+type badgeMsg struct {
+	hardened     bool
+	done, chosen int
+}
+
+// readBadge reads the badge's Hardening Status of m (every step check).
+func readBadge(m *harden.Machine) badgeMsg {
+	rec, _ := harden.LoadRecord(m.Root)
+	var b badgeMsg
+	for _, s := range m.Status(rec) {
 		if s.ID == "ssh" {
-			t.hardened = s.State == harden.Done
+			b.hardened = s.State == harden.Done
 		}
 		if s.State != harden.Skipped {
-			t.chosen++
+			b.chosen++
 		}
 		if s.State == harden.Done {
-			t.done++
+			b.done++
 		}
 	}
+	return b
+}
+
+// readHardening re-reads the badge in the background, off Update.
+func (t Model) readHardening() tea.Cmd {
+	return func() tea.Msg { return readBadge(t.m) }
 }
 
 func (h hardening) statusUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {

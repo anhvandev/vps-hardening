@@ -298,10 +298,9 @@ func (t Model) taskUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		k.ended, k.err, k.end = true, msg.err, time.Now()
 		k.summary = cmp.Or(msg.summary, k.summary)
 		t.busyNote = false
-		t.readHardening()
 		var cmd tea.Cmd
 		t.screen, cmd = t.screen.Update(taskDoneMsg{})
-		return t, cmd
+		return t, tea.Batch(cmd, t.readHardening())
 	}
 	return t, k.wait
 }

@@ -141,7 +141,8 @@ func New(m *harden.Machine, now time.Time) Model {
 	noDocker.Store(!docker.Installed(m.R))
 	t := Model{m: m, now: now, machine: machineLine(m), cursor: slices.Index(items(), "Overview"),
 		screen: screens["Overview"](m), refresh: now}
-	t.readHardening()
+	b := readBadge(m) // the first frame shows the right badge
+	t.hardened, t.done, t.chosen = b.hardened, b.done, b.chosen
 	return t
 }
 
@@ -170,7 +171,9 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return t.taskUpdate(msg)
 	case backMsg:
 		t.focused = false
-		t.readHardening()
+		return t, t.readHardening()
+	case badgeMsg:
+		t.hardened, t.done, t.chosen = msg.hardened, msg.done, msg.chosen
 		return t, nil
 	case NewVersionMsg:
 		t.newer = msg
@@ -314,7 +317,6 @@ func (t Model) open(title string) (tea.Model, tea.Cmd) {
 	t.closeScreen() // e.g. stop following logs
 	t.cursor = slices.Index(items(), title)
 	t.screen, t.focused, t.overlay, t.help, t.refresh = screens[title](t.m), true, false, false, t.now
-	t.readHardening()
 	t.screen, _ = t.screen.Update(t.contentSize())
-	return t, t.screen.Init()
+	return t, tea.Batch(t.screen.Init(), t.readHardening())
 }
