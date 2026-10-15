@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -75,5 +76,32 @@ func TestListFailsWhenSystemctlFails(t *testing.T) {
 	}}
 	if _, err := service.List(r); err == nil {
 		t.Error("want error")
+	}
+}
+
+func TestJournalReadsBoundedTail(t *testing.T) {
+	r := &system.Fake{Results: map[string]system.Result{
+		"journalctl -u nginx.service -n 2 --no-pager": {Stdout: "Oct 15 10:00:01 vps nginx[1]: started\nOct 15 10:00:02 vps nginx[1]: ready\n"},
+		"journalctl -u bad.service -n 2 --no-pager":   {Code: 1, Stderr: "Failed to open journal\n"},
+	}}
+	got, err := service.Journal(r, "nginx.service", 2)
+	if want := []string{"Oct 15 10:00:01 vps nginx[1]: started", "Oct 15 10:00:02 vps nginx[1]: ready"}; err != nil || !slices.Equal(got, want) {
+		t.Errorf("Journal = %q, %v; want %q", got, err, want)
+	}
+	if _, err := service.Journal(r, "bad.service", 2); err == nil || !strings.Contains(err.Error(), "Failed to open journal") {
+		t.Errorf("bad: %v", err)
+	}
+}
+
+func TestFollowStreamsJournalFromBoundedTail(t *testing.T) {
+	r := &system.Fake{Streams: map[string]io.ReadCloser{
+		"journalctl -u nginx.service -n 2 -f --no-pager": io.NopCloser(strings.NewReader("old\nnew\n")),
+	}}
+	rc, err := service.Follow(r, "nginx.service", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := io.ReadAll(rc); string(b) != "old\nnew\n" {
+		t.Errorf("read %q", b)
 	}
 }
