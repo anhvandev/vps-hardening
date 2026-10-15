@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/anhvandev/vpsctl/internal/firewall"
@@ -135,6 +136,20 @@ func TestSkipFlagsAndOptionalStepFailuresAreNotFatal(t *testing.T) {
 	}
 	if slices.Contains(h.calls, "firewall") || slices.Contains(h.calls, "updates") {
 		t.Fatalf("skipped steps ran: %v", h.calls)
+	}
+}
+
+// The skip-flag warnings come in a fixed order.
+func TestSkipWarningsInOrder(t *testing.T) {
+	for range 20 {
+		var out strings.Builder
+		o := Options{User: "alice", Yes: true, SkipFail2ban: true, SkipUpdates: true, SkipSysctl: true}
+		if err := Run(o, newHost(), &out, nil); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), "[!] --skip-fail2ban\n[!] --skip-updates\n[!] --skip-sysctl\n") {
+			t.Fatalf("output:\n%s", out.String())
+		}
 	}
 }
 

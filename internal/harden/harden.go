@@ -115,9 +115,12 @@ func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, erro
 			return err
 		}
 	}
-	for name, skip := range map[string]bool{"fail2ban": o.SkipFail2ban, "updates": o.SkipUpdates, "sysctl": o.SkipSysctl} {
-		if skip {
-			fmt.Fprintf(out, "[!] --skip-%s\n", name)
+	for _, s := range []struct {
+		name string
+		skip bool
+	}{{"fail2ban", o.SkipFail2ban}, {"updates", o.SkipUpdates}, {"sysctl", o.SkipSysctl}} {
+		if s.skip {
+			fmt.Fprintf(out, "[!] --skip-%s\n", s.name)
 		}
 	}
 	fmt.Fprintf(out, "\n== SUMMARY ==\n  admin user : %s (key-only SSH, NOPASSWD sudo)\n  ssh port   : %d\n"+
