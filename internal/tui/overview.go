@@ -147,6 +147,9 @@ func (o overview) cardLayer(i, w, h int) *lipgloss.Layer {
 
 func (o overview) buttons() []button { return []button{{"s", "Create swap", ""}} }
 
+// typing: never (no text field), so ?, m, tab and q go to the shell.
+func (o overview) typing() bool { return false }
+
 func (o overview) keys() string {
 	if o.swap {
 		return keyHelp(o.buttons()) + " · esc back"

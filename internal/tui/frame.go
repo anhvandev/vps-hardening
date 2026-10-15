@@ -174,7 +174,7 @@ const helpText = `Keys
   h        Hardening (while not hardened)
   t        reopen the hidden Task
   m        mouse on/off     ?       this help
-  ctrl+c   quit             q       quit (from the sidebar)
+  ctrl+c   quit             q       quit (unless typing)
 
 Mouse: click a sidebar item, the Hardening badge, a hidden Task
 in the status bar, table rows and buttons; the wheel scrolls tables.

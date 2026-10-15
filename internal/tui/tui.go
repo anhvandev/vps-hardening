@@ -242,6 +242,8 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if s, ok := t.screen.(interface{ typing() bool }); ok && !s.typing() {
 			switch msg.String() { // screens on the shared widgets leave these to the shell
+			case "q":
+				return t.menuKey("q")
 			case "?":
 				t.help = true
 				return t, nil

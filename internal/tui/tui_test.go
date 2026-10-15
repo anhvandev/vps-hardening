@@ -123,6 +123,25 @@ func TestBannerOnUnhardenedHost(t *testing.T) {
 	wantAll(t, v, "NOT HARDENED", "Overview", "SSH         ✗ not key-only")
 }
 
+// The Overview leaves ?, m and tab to the shell, and q quits from it like
+// from any screen that isn't typing.
+func TestShellKeysOnOverview(t *testing.T) {
+	tm := start(debianHost(t))
+	waitFor(t, tm, "Uptime")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // focus the Overview
+	tm.Type("?")
+	waitFor(t, tm, "Shift+drag to select text")
+	tm.Type(" ") // closes the help
+	tm.Type("q")
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+}
+
+func TestQuitFromAScreen(t *testing.T) {
+	tm := openFirewall(t, debianHost(t))
+	tm.Type("q")
+	tm.WaitFinished(t, teatest.WithFinalTimeout(3*time.Second))
+}
+
 func TestQuit(t *testing.T) {
 	tm := start(debianHost(t))
 	waitFor(t, tm, "Overview")
