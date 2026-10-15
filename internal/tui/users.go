@@ -32,8 +32,10 @@ type users struct {
 }
 
 // usersAsk is a one-line question; enter hands the trimmed answer to do.
+// oneLine refuses a multi-line paste outright.
 type usersAsk struct {
 	label, input string
+	oneLine      bool
 	do           func(u users, answer string) (users, tea.Cmd)
 }
 
@@ -67,7 +69,11 @@ func (u users) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		u.job = ""
 		return u, u.load(outcome(done, msg.err))
 	case tea.PasteMsg:
-		if u.ask.do != nil {
+		switch {
+		case u.ask.do == nil:
+		case u.ask.oneLine && strings.ContainsAny(strings.TrimSpace(msg.Content), "\r\n"):
+			u.status = "ERROR: paste one line only"
+		default:
 			u.ask.input += msg.Content
 		}
 	case tea.KeyPressMsg:
@@ -92,7 +98,10 @@ func (u users) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		u.cursor = min(u.cursor+1, max(len(u.list)-1, 0))
 	case "c":
-		u.ask = usersAsk{label: "New user name", do: func(u users, name string) (users, tea.Cmd) {
+		u.ask = usersAsk{label: "New user name", oneLine: true, do: func(u users, name string) (users, tea.Cmd) {
+			if !user.ValidName(name) { // the input may be a pasted secret: keep it out of the log
+				return u, u.mutate("users create", "", func() error { return user.ErrInvalidName })
+			}
 			return u, u.mutate("users create "+name, "created "+name, func() error { return u.m.CreateUser(name) })
 		}}
 	case "a":
