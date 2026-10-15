@@ -90,6 +90,21 @@ func TestSwapCreateRefusedWithoutDisk(t *testing.T) {
 	}
 }
 
+// A resize builds the new swapfile beside the old one: the old file's
+// space doesn't count as free.
+func TestSwapResizeRefusedWithoutDiskForBoth(t *testing.T) {
+	h := swapHost(t, "/vpsctl.swap file 2097148 0 -2\n", swapLine)
+	h.fake.Results["df -B1 --output=avail /"] = system.Result{Stdout: "Avail\n3221225472\n"} // 3 GiB
+	tm := openSwap(t, h, "vpsctl")
+	tm.Type("e")
+	waitFor(t, tm, "Resize swapfile")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	tm.Type("3")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "refused: not enough free disk for 3.0 GiB")
+	ctrlCView(t, tm)
+}
+
 // Swap in use beyond the free RAM: Remove and Resize are disabled with the reason.
 func TestSwapRemoveRefusedOnOOMRisk(t *testing.T) {
 	h := swapHost(t, ownSwapfile, swapLine)
