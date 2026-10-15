@@ -57,6 +57,35 @@ func TestAppendWritesOneLinePerAction(t *testing.T) {
 	}
 }
 
+// Holder peeks at the lock without taking it: "" when free (or never
+// created), the holder while held, and the lock stays takeable after a peek.
+func TestHolderPeeksAtTheLock(t *testing.T) {
+	t.Setenv("SUDO_USER", "alice")
+	p := filepath.Join(t.TempDir(), "vpsctl.lock")
+	if h := Holder(p); h != "" {
+		t.Errorf("no lock file: holder %q", h)
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Error("Holder created the lock file")
+	}
+	lk, err := Lock(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, want := Holder(p), fmt.Sprintf("alice (pid %d)", os.Getpid()); h != want {
+		t.Errorf("held: holder %q, want %q", h, want)
+	}
+	lk.Close()
+	if h := Holder(p); h != "" {
+		t.Errorf("released: holder %q", h)
+	}
+	lk, err = Lock(p)
+	if err != nil {
+		t.Fatalf("lock after peek: %v", err)
+	}
+	lk.Close()
+}
+
 func TestLockHolderIsRootWithoutSudoUser(t *testing.T) {
 	t.Setenv("SUDO_USER", "")
 	p := filepath.Join(t.TempDir(), "vpsctl.lock")

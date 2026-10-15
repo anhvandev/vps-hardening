@@ -12,17 +12,20 @@
 // every message, including every key except ctrl+c (unless its busy() says a
 // gated job runs), and returns the Back
 // command to hand focus back to the menu. Every change to the host goes
-// through logMutation (global lock + one action-log line); Lockout Guard checks
-// (internal/guard) run inside it, on facts read under the lock.
+// through a Task (task.go) or, on screens not moved yet, logMutation (both:
+// global lock + one action-log line); Lockout Guard checks (internal/guard)
+// run inside them, on facts read under the lock.
 package tui
 
 import (
+	"path/filepath"
 	"slices"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/harden"
 )
 
@@ -89,6 +92,22 @@ type Model struct {
 	mouseOff bool          // m: mouse capture off, the terminal selects text
 	help     bool          // ?: keymap overlay shown
 	overlay  bool          // tab on a narrow terminal: sidebar shown over the content
+	task     *task         // the running Task, or the ended one until its card is closed
+	refused  string        // why the last Task did not start; cleared once the lock is free
+	holder   string        // who holds the global lock, "" if free (read every tick)
+}
+
+// tickMsg is the shell's clock: every second it moves now and re-reads the
+// lock holder.
+type tickMsg struct {
+	now    time.Time
+	holder string
+}
+
+func (t Model) tick() tea.Cmd {
+	return tea.Tick(time.Second, func(now time.Time) tea.Msg {
+		return tickMsg{now, actionlog.Holder(filepath.Join(t.m.Root, actionlog.LockPath))}
+	})
 }
 
 // New opens the TUI on the Overview, with the menu focused; now is the
@@ -99,10 +118,20 @@ func New(m *harden.Machine, now time.Time) Model {
 		screen: screens["Overview"](m), hardened: m.SSH.StageBLive()}
 }
 
-func (t Model) Init() tea.Cmd { return t.screen.Init() }
+func (t Model) Init() tea.Cmd { return tea.Batch(t.screen.Init(), t.tick()) }
 
 func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tickMsg:
+		t.now, t.holder = msg.now, msg.holder
+		if msg.holder == "" {
+			t.refused = ""
+		}
+		return t, t.tick()
+	case startTaskMsg:
+		return t.startTask(msg)
+	case taskStepMsg, taskLineMsg, taskEndMsg:
+		return t.taskUpdate(msg)
 	case backMsg:
 		t.focused = false
 		t.hardened = t.m.SSH.StageBLive()
@@ -113,6 +142,13 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		t.w, t.h = msg.Width, msg.Height
 	case tea.MouseClickMsg:
+		if t.task != nil && t.task.shown { // the panel is modal
+			return t.panelClick(msg), nil
+		}
+		if t.task != nil && msg.Button == tea.MouseLeft && msg.Y == t.h-2 { // the status bar reopens it
+			t.task.shown = true
+			return t, nil
+		}
 		if title := t.clicked(msg); title != "" && !t.busy() {
 			return t.open(title)
 		}
@@ -127,14 +163,20 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			// A running gated job is never abandoned (Stage A would stay
 			// without restore): the screen gets ctrl+c instead, which at the
-			// Verify Gate means "Stop safely".
-			if !t.busy() {
+			// Verify Gate means "Stop safely". A running Task blocks it too.
+			if !t.busy() && !t.running() {
 				return t, tea.Quit
 			}
 			t.busyNote = true
+			if !t.busy() {
+				return t, nil
+			}
 			var cmd tea.Cmd
 			t.screen, cmd = t.screen.Update(msg)
 			return t, cmd
+		}
+		if t.task != nil && t.task.shown {
+			return t.panelKey(msg.String())
 		}
 		if t.help { // any key closes the keymap
 			t.help = false
@@ -161,7 +203,15 @@ func (t Model) busy() bool {
 func (t Model) menuKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q":
+		if t.running() {
+			t.busyNote = true
+			return t, nil
+		}
 		return t, tea.Quit
+	case "t":
+		if t.task != nil {
+			t.task.shown = true
+		}
 	case "up", "k":
 		t.cursor = max(t.cursor-1, 0)
 	case "down", "j":

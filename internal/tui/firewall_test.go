@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -125,11 +126,17 @@ func TestFirewallScreenFlow(t *testing.T) {
 // openFirewall starts the TUI on h and focuses the loaded Firewall screen.
 func openFirewall(t *testing.T, h *testHost) *teatest.TestModel {
 	t.Helper()
+	return openFirewallOn(t, h, h.fake)
+}
+
+// openFirewallOn is openFirewall with commands going through r (wrapping h.fake).
+func openFirewallOn(t *testing.T, h *testHost, r system.Runner) *teatest.TestModel {
+	t.Helper()
 	h.fake.Results["ss -Hltun"] = ssOut
 	h.fake.Results["sshd -T"] = system.Result{Stdout: "port 22\n"}
 	h.write("/etc/ssh/ssh_host_ed25519_key", "k")
 	h.write("/run/.keep", "") // the lock lives under /run
-	tm := start(h)
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
 	waitFor(t, tm, "RAM")
 	tm.Type(menuTo("Firewall"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -176,7 +183,7 @@ func TestFirewallOpenPort(t *testing.T) {
 	tm.Type("a6000-6100/udp from 10.0.0.0/8")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "opened 6000-6100/udp from 10.0.0.0/8")
-	closeFirewall(t, tm)
+	ctrlCView(t, tm)
 	if got := mutations(h); !slices.Equal(got, []string{"ufw allow from 10.0.0.0/8 to any port 6000:6100 proto udp"}) {
 		t.Errorf("ran %q", got)
 	}
@@ -185,45 +192,45 @@ func TestFirewallOpenPort(t *testing.T) {
 	}
 }
 
+// The Lockout Guard refusal fails the Task at its first step: the Failed card
+// names the step and the reason.
 func TestFirewallRefusesRemovingSSHPortRule(t *testing.T) {
 	h := debianHost(t)
 	tm := openFirewall(t, h)
 	tm.Type("d") // first row: 22/tcp
-	waitFor(t, tm, "refused: SSH port 22 would no longer be open to anywhere")
-	closeFirewall(t, tm)
+	waitFor(t, tm, `step 1/2 "Lockout Guard check": refused: SSH port 22`)
+	wantAll(t, ctrlCView(t, tm), "Task: Remove rule 22/tcp", "Failed", "would no longer be", "open to anywhere")
 	if got := mutations(h); len(got) != 0 {
 		t.Errorf("ran %q", got)
 	}
-	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall remove 22/tcp: failed: refused") {
+	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall remove 22/tcp: failed: refused: SSH port 22 would no longer be open to anywhere") {
 		t.Errorf("action log:\n%s", log)
 	}
+	wantAll(t, oneOutput(t, h), `step 1/2 "Lockout Guard check" failed: refused`)
 }
 
 // Removing a rule deletes exactly that rule: 80/tcp, 443/tcp and the
 // source-limited rule are each removed alone.
 func TestFirewallRemovesOnlySelectedRule(t *testing.T) {
-	h := debianHost(t)
-	h.fake.Results["ufw show added"] = system.Result{Stdout: "ufw allow 22/tcp\nufw allow 80/tcp\nufw allow 443/tcp\n" +
-		"ufw allow from 10.0.0.0/8 to any port 5432 proto tcp\n"}
-	for _, c := range []string{"ufw delete allow 80/tcp", "ufw delete allow 443/tcp",
-		"ufw delete allow from 10.0.0.0/8 to any port 5432 proto tcp"} {
-		h.fake.Results[c] = system.Result{}
-	}
-	h.fake.Results["sshd -T"] = system.Result{Stdout: "port 22\n"}
-	h.write("/etc/ssh/ssh_host_ed25519_key", "k")
-	h.write("/run/.keep", "")
-	s := screens["Firewall"](harden.NewMachine(h.fake, h.host, h.root, io.Discard))
-	s, _ = s.Update(s.Init()())
-	for _, step := range [][2]string{{"jjd", "removed 443/tcp"}, {"jd", "removed 5432/tcp from 10.0.0.0/8"}, {"kkd", "removed 80/tcp"}} {
-		s = press(s, step[0])
-		wantAll(t, ansi.Strip(s.View().Content), step[1])
-	}
-	want := []string{"ufw delete allow 443/tcp", "ufw delete allow from 10.0.0.0/8 to any port 5432 proto tcp", "ufw delete allow 80/tcp"}
-	if got := mutations(h); !slices.Equal(got, want) {
-		t.Errorf("ran %q, want %q", got, want)
-	}
-	if log := actionLog(t, h); strings.Count(log, ": ok\n") != 3 {
-		t.Errorf("action log:\n%s", log)
+	for _, c := range []struct{ keys, done, cmd string }{
+		{"jjd", "removed 443/tcp", "ufw delete allow 443/tcp"},
+		{"jjjd", "removed 5432/tcp from 10.0.0.0/8", "ufw delete allow from 10.0.0.0/8 to any port 5432 proto tcp"},
+		{"jd", "removed 80/tcp", "ufw delete allow 80/tcp"},
+	} {
+		h := debianHost(t)
+		h.fake.Results["ufw show added"] = system.Result{Stdout: "ufw allow 22/tcp\nufw allow 80/tcp\nufw allow 443/tcp\n" +
+			"ufw allow from 10.0.0.0/8 to any port 5432 proto tcp\n"}
+		h.fake.Results[c.cmd] = system.Result{}
+		tm := openFirewall(t, h)
+		tm.Type(c.keys)
+		waitFor(t, tm, c.done)
+		ctrlCView(t, tm)
+		if got := mutations(h); !slices.Equal(got, []string{c.cmd}) {
+			t.Errorf("ran %q, want %q", got, c.cmd)
+		}
+		if log := actionLog(t, h); strings.Count(log, ": ok\n") != 1 {
+			t.Errorf("action log:\n%s", log)
+		}
 	}
 }
 
@@ -270,7 +277,7 @@ func TestFirewallLockBusy(t *testing.T) {
 	defer lk.Close()
 	tm := openFirewall(t, h)
 	tm.Type("jd")
-	waitFor(t, tm, "locked by ")
+	waitFor(t, tm, "refused: locked by ")
 	v := closeFirewall(t, tm)
 	wantAll(t, v, "(pid ", "80", "5432")
 	if got := mutations(h); len(got) != 0 {
@@ -288,8 +295,8 @@ func TestFirewallFailedOpenIsLogged(t *testing.T) {
 	tm := openFirewall(t, h)
 	tm.Type("a8080/tcp")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitFor(t, tm, "ERROR: boom")
-	closeFirewall(t, tm)
+	waitFor(t, tm, `step 1/1 "Allow 8080/tcp": ufw allow 8080/tcp: exit 1: ERROR: boom`)
+	ctrlCView(t, tm)
 	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall open 8080/tcp: failed: ") {
 		t.Errorf("action log:\n%s", log)
 	}
