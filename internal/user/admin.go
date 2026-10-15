@@ -43,13 +43,7 @@ var validName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 // EnsureAdmin creates name if missing (key-only, no password), adds it to the
 // admin group and grants per-user NOPASSWD sudo. Idempotent.
 func (m *Manager) EnsureAdmin(name string) error {
-	if name == "root" || slices.Contains(DefaultCloudUsers, name) {
-		return fmt.Errorf("refusing admin user %q: root or a Default Cloud User that Hardening locks", name)
-	}
-	if !validName.MatchString(name) {
-		return fmt.Errorf("invalid user name %q", name)
-	}
-	pw, exists, err := m.Lookup(name)
+	pw, exists, err := m.checkName("admin user", name)
 	if err != nil {
 		return err
 	}
@@ -57,11 +51,7 @@ func (m *Manager) EnsureAdmin(name string) error {
 		return fmt.Errorf("refusing admin user %q: existing system user (UID %d < 1000)", name, pw.UID)
 	}
 	if !exists {
-		cmd := []string{"useradd", "-m", "-s", "/bin/bash", name}
-		if m.Host.Family == "debian" {
-			cmd = []string{"adduser", "--disabled-password", "--gecos", "", name}
-		}
-		if err := m.run(cmd[0], cmd[1:]...); err != nil {
+		if err := m.addUser(name); err != nil {
 			return err
 		}
 	}
@@ -75,6 +65,27 @@ func (m *Manager) EnsureAdmin(name string) error {
 		}
 	}
 	return m.writeSudoers(name)
+}
+
+// checkName refuses root, Default Cloud Users and names useradd would
+// reject (what for kind), then looks name up.
+func (m *Manager) checkName(what, name string) (pw PasswdEntry, exists bool, err error) {
+	if name == "root" || slices.Contains(DefaultCloudUsers, name) {
+		return pw, false, fmt.Errorf("refusing %s %q: root or a Default Cloud User that Hardening locks", what, name)
+	}
+	if !validName.MatchString(name) {
+		return pw, false, fmt.Errorf("invalid user name %q", name)
+	}
+	return m.Lookup(name)
+}
+
+// addUser creates name key-only: a home and a login shell, never a password.
+func (m *Manager) addUser(name string) error {
+	cmd := []string{"useradd", "-m", "-s", "/bin/bash", name}
+	if m.Host.Family == "debian" {
+		cmd = []string{"adduser", "--disabled-password", "--gecos", "", name}
+	}
+	return m.run(cmd[0], cmd[1:]...)
 }
 
 // writeSudoers installs a visudo-validated NOPASSWD rule for name. The 99-
