@@ -84,6 +84,22 @@ func TestServicesEditOverride(t *testing.T) {
 	}
 }
 
+// Saving the override unchanged applies nothing and says so in the status bar.
+func TestServicesEditUnchanged(t *testing.T) {
+	h := svcHost(t)
+	h.write("/etc/systemd/system/cron.service.d/override.conf", "[Service]\nNice=1\n")
+	fakeEditor(t, `[Service]\nNice=1\n`)
+	tm := openServices(t, h)
+	tm.Type("e")
+	waitFor(t, tm, "no changes to cron.service")
+	if v := ctrlCView(t, tm); !strings.Contains(v, "\n│ no changes to cron.service") { // the status bar, left
+		t.Errorf("notice not in the status bar:\n%s", v)
+	}
+	if strings.Contains(h.actionLog(), "cron.service") {
+		t.Error("an unchanged override ran a Task")
+	}
+}
+
 // A failed verify applies nothing: the previous override stays, systemd is not
 // reloaded, and the operator can discard or re-edit the copy.
 func TestServicesEditVerifyFailure(t *testing.T) {

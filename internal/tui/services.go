@@ -206,6 +206,8 @@ func (s servicesScreen) typing() bool {
 	return s.form != nil || s.table.typing() || s.asking && s.ask.typing()
 }
 
+func (s servicesScreen) notice() string { return s.status }
+
 func (s servicesScreen) keys() string {
 	switch {
 	case s.edit != nil && s.edit.failed:
@@ -279,7 +281,7 @@ func (s servicesScreen) rows() [][]string {
 }
 
 // layout is the screen: header with the filter dropdown, table, detail box,
-// buttons (or the form), status, and the confirm over them.
+// buttons (or the form), and the confirm over them.
 func (s servicesScreen) layout() *lipgloss.Compositor {
 	title := titleStyle.Render("Services")
 	if !s.loaded {
@@ -287,7 +289,7 @@ func (s servicesScreen) layout() *lipgloss.Compositor {
 	}
 	if s.form != nil {
 		hint := dimStyle.Render("restart: " + strings.Join(service.RestartPolicies, ", ") + " · user root only if typed explicitly")
-		return stack(title, "", s.form.view(), "", hint, s.status)
+		return stack(title, "", s.form.view(), "", hint)
 	}
 	which := "running·enabled·failed"
 	if s.all {
@@ -307,9 +309,6 @@ func (s servicesScreen) layout() *lipgloss.Compositor {
 	}
 	bs := s.buttons()
 	blocks = append(blocks, buttonRow(bs[:5]...), buttonRow(bs[5:]...))
-	if s.status != "" {
-		blocks = append(blocks, s.status)
-	}
 	c := stack(blocks...)
 	if s.asking {
 		c.AddLayers(s.ask.layer(s.w))

@@ -86,7 +86,7 @@ func (e *unitEdit) close() {
 
 // overrideFlow is the override edit (in $EDITOR via unitEdit) and revert
 // flow shared by the Services and Timers screens, on the screen's edit in
-// progress (*edit, nil if none) and status line.
+// progress (*edit, nil if none) and status-bar notice.
 type overrideFlow struct {
 	m        *harden.Machine
 	kind     string // "service" or "timer": the Task History label

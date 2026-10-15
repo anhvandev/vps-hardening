@@ -26,9 +26,10 @@ package tui
 // to the table), a button its key press, so Update handles clicks as keys.
 // Hit ids: "row:N" for table rows, the key for buttons.
 //
-// Two optional screen methods the shell asks: keys() string, the screen's
-// keys for the status bar; typing() bool, true while a text field has focus
-// (otherwise ?, m and tab go to the shell, not the screen).
+// Optional screen methods the shell asks: keys() string, the screen's keys
+// for the status bar; notice() string, a note for the status bar's left
+// (screens draw no status line of their own); typing() bool, true while a
+// text field has focus (otherwise ?, m and tab go to the shell, not the screen).
 
 import (
 	"strconv"

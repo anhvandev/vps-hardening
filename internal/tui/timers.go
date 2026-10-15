@@ -177,6 +177,8 @@ func (s timersScreen) typing() bool {
 	return s.form != nil || s.table.typing()
 }
 
+func (s timersScreen) notice() string { return s.status }
+
 func (s timersScreen) keys() string {
 	switch {
 	case s.edit != nil && s.edit.failed:
@@ -211,7 +213,7 @@ func (s timersScreen) layout() *lipgloss.Compositor {
 		return stack(title, "", "loading…")
 	case s.form != nil:
 		hint := dimStyle.Render("schedule: systemd calendar syntax, e.g. daily, Mon *-*-* 03:00, *:0/15")
-		return stack(title, "", s.form.view(), "", hint, s.status)
+		return stack(title, "", s.form.view(), "", hint)
 	}
 	blocks := []any{title}
 	if s.err != nil {
@@ -220,9 +222,6 @@ func (s timersScreen) layout() *lipgloss.Compositor {
 		blocks = append(blocks, s.table.layer(s.w))
 	}
 	blocks = append(blocks, buttonRow(s.buttons()...))
-	if s.status != "" {
-		blocks = append(blocks, s.status)
-	}
 	c := stack(blocks...)
 	if s.asking {
 		c.AddLayers(s.ask.layer(s.w))
