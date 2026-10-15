@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -23,8 +22,6 @@ import (
 
 // version is set at build time: -ldflags "-X main.version=v1.2.3".
 var version = "dev"
-
-const logDir = "/var/log/vpsctl"
 
 // lock takes the shared global mutation lock.
 var lock = actionlog.Lock
@@ -97,19 +94,14 @@ func runHarden(args []string) int {
 	defer lk.Close()
 
 	// The log never sees the private key: it goes straight to the TTY or --key-out.
-	if err := os.MkdirAll(logDir, 0o700); err != nil {
-		fmt.Fprintln(os.Stderr, "ERROR:", err)
-		return 1
-	}
-	logPath := fmt.Sprintf("%s/harden-%s.log", logDir, time.Now().Format("20060102-150405"))
-	logf, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	logf, err := harden.OpenLog("")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
 	}
 	defer logf.Close()
 	out, errOut := io.MultiWriter(os.Stdout, logf), io.MultiWriter(os.Stderr, logf)
-	fmt.Fprintln(out, "[*] logging to", logPath)
+	fmt.Fprintln(out, "[*] logging to", logf.Name())
 
 	err = hardenHost(o, out)
 	result, code := "ok", 0

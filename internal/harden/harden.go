@@ -8,6 +8,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/anhvandev/vpsctl/internal/firewall"
 )
@@ -50,6 +53,19 @@ func ParseFlags(args []string) (Options, error) {
 		return o, errors.New("--port cannot be combined with --skip-firewall (the firewall would block the new SSH port)")
 	}
 	return o, nil
+}
+
+// LogDir holds the timestamped Hardening logs.
+const LogDir = "/var/log/vpsctl"
+
+// OpenLog creates a new timestamped Hardening log (mode 600) under root's LogDir.
+func OpenLog(root string) (*os.File, error) {
+	dir := filepath.Join(root, LogDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	name := filepath.Join(dir, "harden-"+time.Now().Format("20060102-150405")+".log")
+	return os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 }
 
 // Host is everything Hardening does to the machine (*Machine in production).
