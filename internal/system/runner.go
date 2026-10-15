@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -42,12 +43,56 @@ func (Exec) Run(name string, args ...string) (Result, error) {
 	return res, err
 }
 
+// Streamer starts a long-running command (journalctl -f) and hands back its
+// stdout as it is written; Close stops the command. Runners that can stream
+// implement it next to Run.
+type Streamer interface {
+	Stream(name string, args ...string) (io.ReadCloser, error)
+}
+
+func (Exec) Stream(name string, args ...string) (io.ReadCloser, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return stream{out, cmd}, nil
+}
+
+// stream is a running command's stdout; Close kills the command and reaps it.
+type stream struct {
+	io.Reader
+	cmd *exec.Cmd
+}
+
+func (s stream) Close() error {
+	s.cmd.Process.Kill()
+	s.cmd.Wait() // "signal: killed" is the expected outcome, not an error
+	return nil
+}
+
 // Fake is a scripted Runner for tests. Results is keyed by the full command
 // line ("systemctl is-enabled ssh.socket"); unscripted commands fail as if the
-// binary were missing. Every call is appended to Calls.
+// binary were missing. Streams scripts Stream the same way. Every call is
+// appended to Calls.
 type Fake struct {
 	Results map[string]Result
+	Streams map[string]io.ReadCloser
 	Calls   []string
+}
+
+func (f *Fake) Stream(name string, args ...string) (io.ReadCloser, error) {
+	line := strings.Join(append([]string{name}, args...), " ")
+	f.Calls = append(f.Calls, line)
+	rc, ok := f.Streams[line]
+	if !ok {
+		return nil, fmt.Errorf("fake: %q: %w", line, exec.ErrNotFound)
+	}
+	return rc, nil
 }
 
 func (f *Fake) Run(name string, args ...string) (Result, error) {
