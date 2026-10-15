@@ -24,11 +24,14 @@ const (
 	TaskDir = "/var/log/vpsctl/tasks"
 )
 
+// stamp is a Task History line's time: RFC 3339 to the microsecond, so each
+// Task (one at a time, under the lock) gets its own.
+const stamp = "2006-01-02T15:04:05.000000Z07:00"
+
 // OutputPath is the output file of the Task whose Task History line carries
-// time at (second resolution, local time).
-// ponytail: two Tasks started in the same second share one file; add a suffix if that ever matters.
+// time at.
 func OutputPath(at time.Time) string {
-	return filepath.Join(TaskDir, at.Format("20060102-150405")+".log")
+	return filepath.Join(TaskDir, at.Format("20060102-150405.000000")+".log")
 }
 
 // Lock takes the global mutation lock at path; the kernel drops it when the
@@ -88,7 +91,7 @@ func AppendAt(path string, at time.Time, action, result string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = fmt.Fprintf(f, "%s %s %s: %s\n", at.Format(time.RFC3339), operator(), action, result)
+	_, err = fmt.Fprintf(f, "%s %s %s: %s\n", at.Format(stamp), operator(), action, result)
 	return err
 }
 

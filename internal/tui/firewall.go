@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/anhvandev/vpsctl/internal/docker"
 	"github.com/anhvandev/vpsctl/internal/firewall"
 	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
@@ -24,7 +25,9 @@ func init() { screens["Firewall"] = newFirewall }
 // added by hand included), each with the Listening Port behind it. a opens a
 // port or range, d removes the selected rule after a Yes/No; both run as
 // Tasks. Rules the Lockout Guard protects are marked ◆ and their Remove is
-// disabled with the reason; the guard checks again under the lock.
+// disabled with the reason; the guard checks again under the lock. Docker
+// Published Ports on all interfaces follow the rules as rows that bypass the
+// firewall, with the fix; o opens the container in Docker.
 type firewallScreen struct {
 	m      *harden.Machine
 	loaded bool
@@ -44,6 +47,7 @@ type firewallMsg struct {
 	err       error           // rules not listed
 	listening []listeningPort // nil if ss failed
 	sshPort   int             // 0 when unknown
+	published []openPort      // Docker ports that bypass the firewall
 }
 
 func newFirewall(m *harden.Machine) tea.Model {
@@ -56,6 +60,8 @@ func (f firewallScreen) Init() tea.Cmd {
 		msg.state, msg.rules, msg.err = firewallRules(f.m)
 		msg.listening = listeningPorts(f.m.R)
 		msg.sshPort, _ = f.m.CurrentPort()
+		cs, _ := docker.Containers(f.m.R) // no Docker: no rows
+		msg.published = openPorts(cs)
 		return msg
 	}
 }
@@ -109,8 +115,21 @@ func (f firewallScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		f.asking, f.ask = true, newConfirm("Remove rule "+f.target.String()+"?")
 	case "r":
 		return f, f.Init()
+	case "o":
+		if op, ok := f.published(); ok {
+			return f, func() tea.Msg { return openMsg{"Docker", op.c.Name} }
+		}
 	}
 	return f, nil
+}
+
+// published is the selected Published Port; ok is false on a rule.
+func (f firewallScreen) published() (openPort, bool) {
+	i := f.table.selected() - len(f.fw.rules)
+	if i < 0 || i >= len(f.fw.published) {
+		return openPort{}, false
+	}
+	return f.fw.published[i], true
 }
 
 // formUpdate edits the open-a-port form; enter validates, then opens.
@@ -156,15 +175,26 @@ func (f firewallScreen) refusal(r firewall.Rule) string {
 
 func (f firewallScreen) buttons() []button {
 	rm := button{"d", "Remove", "no rule selected"}
+	if _, ok := f.published(); ok {
+		rm.why = "a Published Port is changed in Docker, not in the firewall"
+		return []button{{"a", "+ Open port", ""}, rm, {"r", "Refresh", ""}, {"o", "Open in Docker", ""}}
+	}
 	if i := f.table.selected(); i >= 0 {
 		rm.why = f.refusal(f.fw.rules[i])
 	}
 	return []button{{"a", "+ Open port", ""}, rm, {"r", "Refresh", ""}}
 }
 
-// rows are the table rows, one per rule; rules the guard protects are marked ◆.
+// rows are the table rows, one per rule (rules the guard protects are marked
+// ◆), then one per Published Port.
 func (f firewallScreen) rows() [][]string {
 	var rows [][]string
+	listening := func(r firewall.Rule) string {
+		if _, ok := f.listening(r); ok {
+			return okStyle.Render(glyph("●")) + " " + f.listener(r)
+		}
+		return naStyle.Render(glyph("·") + " " + f.listener(r))
+	}
 	for _, r := range f.fw.rules {
 		note := ""
 		if f.refusal(r) != "" {
@@ -173,11 +203,15 @@ func (f firewallScreen) rows() [][]string {
 				note = "SSH " + note
 			}
 		}
-		listening := naStyle.Render(glyph("·") + " " + f.listener(r))
-		if _, ok := f.listening(r); ok {
-			listening = okStyle.Render(glyph("●")) + " " + f.listener(r)
-		}
-		rows = append(rows, []string{ports(r), cmp.Or(r.Proto, "any"), cmp.Or(r.From, "any"), listening, note})
+		rows = append(rows, []string{ports(r), cmp.Or(r.Proto, "any"), cmp.Or(r.From, "any"), listening(r), note})
+	}
+	for _, op := range f.fw.published {
+		start, end, _ := strings.Cut(op.p.HostPort, "-")
+		r := firewall.Rule{Proto: op.p.Proto}
+		r.Port, _ = strconv.Atoi(start)
+		r.End, _ = strconv.Atoi(end)
+		rows = append(rows, []string{op.p.HostPort, op.p.Proto, "(Docker)", listening(r),
+			warnStyle.Render(glyph("⚠")) + " Published Port, bypasses firewall"})
 	}
 	return rows
 }
@@ -201,7 +235,9 @@ func (f firewallScreen) layout() *lipgloss.Compositor {
 	case f.fw.err != nil:
 	default:
 		blocks = append(blocks, f.table.layer(f.w))
-		if i := f.table.selected(); i >= 0 && f.h >= 26 {
+		if op, ok := f.published(); ok && f.h >= 26 {
+			blocks = append(blocks, detailBox(op.p.HostPort+"/"+op.p.Proto, op.fix(firewallName(f.m)), f.w, 3))
+		} else if i := f.table.selected(); i >= 0 && !ok && f.h >= 26 {
 			blocks = append(blocks, detailBox(f.fw.rules[i].String(), f.detail(f.fw.rules[i]), f.w, 3))
 		}
 	}

@@ -37,7 +37,7 @@ func TestWideFrame(t *testing.T) {
 	waitFor(t, tm, "5432/tcp")
 	v := quitView(t, tm)
 	wantAll(t, v, "prod-sg-01", "Ubuntu 24.04", "2 vCPU · 4 GB", "● Hardened",
-		"SECURITY", "ACCESS", "WORKLOADS", "SYSTEM", "Hardening", "Action log", "? help", "q quit")
+		"SECURITY", "ACCESS", "WORKLOADS", "SYSTEM", "Hardening", "Task History", "? help", "q quit")
 	for _, hidden := range []string{"Logins", "Docker", "Updates", "Swap", "coming soon"} {
 		if strings.Contains(leftCols(v, 26), hidden) {
 			t.Errorf("unbuilt %q shown:\n%s", hidden, v)
@@ -100,7 +100,7 @@ func TestNarrowFrame(t *testing.T) {
 	waitFor(t, tm, "5432/tcp")
 	tm.Type("j") // Overview → Disk, still SYSTEM
 	v := finalView(t, tm)
-	wantAll(t, v, "SYSTEM  Overview · Disk · Action log", "tab menu", "5432/tcp")
+	wantAll(t, v, "SYSTEM  Overview · Disk · Task History", "tab menu", "5432/tcp")
 	if strings.Contains(v, "WORKLOADS") {
 		t.Errorf("full sidebar shown on a narrow terminal:\n%s", v)
 	}
