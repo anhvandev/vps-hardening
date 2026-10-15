@@ -4,8 +4,12 @@
 
 **Blocked by:** 19
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Follow streams new lines without freezing the TUI; leaving the view terminates the stream process.
-- [ ] Large journals load a bounded tail, not the whole history.
-- [ ] Tests with scripted journal output; follow tested via a fake stream.
+- [x] Follow streams new lines without freezing the TUI; leaving the view terminates the stream process.
+- [x] Large journals load a bounded tail, not the whole history.
+- [x] Tests with scripted journal output; follow tested via a fake stream.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ c505e2b (merge). Review fixes in b136567.

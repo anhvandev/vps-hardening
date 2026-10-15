@@ -4,9 +4,13 @@
 
 **Blocked by:** 12, 17
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Sudo grant validated with visudo and installed atomically; revoke removes only vpsctl's rule.
-- [ ] Guard scenarios unit-tested: alice locks bob (allowed), alice locks alice (refused), last usable Admin User revoked (refused), same behaviour on console sessions.
-- [ ] Delete asks about the home directory with "keep" as the default.
-- [ ] Global lock + action-log line per mutation.
+- [x] Sudo grant validated with visudo and installed atomically; revoke removes only vpsctl's rule.
+- [x] Guard scenarios unit-tested: alice locks bob (allowed), alice locks alice (refused), last usable Admin User revoked (refused), same behaviour on console sessions.
+- [x] Delete asks about the home directory with "keep" as the default.
+- [x] Global lock + action-log line per mutation.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ dd1441d (merge). Review fixes in b136567.

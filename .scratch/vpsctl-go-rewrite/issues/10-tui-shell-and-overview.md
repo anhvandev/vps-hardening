@@ -4,11 +4,15 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Root + systemd preflight runs before the TUI opens; failure prints a clean error.
-- [ ] Overview reads everything live through the existing command seam each time it is shown; nothing is cached to disk.
-- [ ] "Not hardened" is derived from the live SSH state (Stage B not live).
-- [ ] Missing pieces (fail2ban not installed, firewall inactive) render as a state, not an error.
-- [ ] `teatest` covers: Overview render on a hardened host, banner on an unhardened host, quit.
-- [ ] Container matrix still green; menu entries for modules not yet built are hidden or marked "coming soon".
+- [x] Root + systemd preflight runs before the TUI opens; failure prints a clean error.
+- [x] Overview reads everything live through the existing command seam each time it is shown; nothing is cached to disk.
+- [x] "Not hardened" is derived from the live SSH state (Stage B not live).
+- [x] Missing pieces (fail2ban not installed, firewall inactive) render as a state, not an error.
+- [x] `teatest` covers: Overview render on a hardened host, banner on an unhardened host, quit.
+- [x] Container matrix still green; menu entries for modules not yet built are hidden or marked "coming soon".
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ 46214b6 (merge). Review fixes in b136567.

@@ -4,8 +4,12 @@
 
 **Blocked by:** 09, 10
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Reads the log written by the shared module from 09; missing log shows "no actions yet".
-- [ ] Large logs load a bounded tail.
-- [ ] One `teatest` render with fixture lines.
+- [x] Reads the log written by the shared module from 09; missing log shows "no actions yet".
+- [x] Large logs load a bounded tail.
+- [x] One `teatest` render with fixture lines.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ d4eda85 (merge). Review fixes in b136567.

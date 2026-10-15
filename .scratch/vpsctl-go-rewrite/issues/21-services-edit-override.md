@@ -4,10 +4,14 @@
 
 **Blocked by:** 19
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The TUI hands the terminal to the editor and resumes cleanly afterwards.
-- [ ] Invalid edit → no reload, previous override (or none) still in effect; tested with a scripted verify failure.
-- [ ] Protected Units cannot be edited (guard refusal).
-- [ ] Revert removes the override and reloads.
-- [ ] Global lock held for the edit; action-log line with result.
+- [x] The TUI hands the terminal to the editor and resumes cleanly afterwards.
+- [x] Invalid edit → no reload, previous override (or none) still in effect; tested with a scripted verify failure.
+- [x] Protected Units cannot be edited (guard refusal).
+- [x] Revert removes the override and reloads.
+- [x] Global lock held for the edit; action-log line with result.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ 60e73f0 (merge). Review fixes in b136567.

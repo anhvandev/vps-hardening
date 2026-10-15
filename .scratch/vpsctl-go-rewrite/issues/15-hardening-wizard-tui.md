@@ -4,11 +4,15 @@
 
 **Blocked by:** 14
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Same validation as the CLI (reject root, Default Cloud User names, system accounts; `--port` with skip-firewall rejected).
-- [ ] Private key never appears in the TUI frame, the Hardening log or the action log.
-- [ ] The raw-key display is a reusable piece (used again by 17).
-- [ ] Stopping at the gate behaves like CLI exit 3: pre-run SSH restored, banner stays.
-- [ ] After success the banner disappears without restarting the TUI.
-- [ ] `teatest`: wizard happy path with scripted host; gate stop path.
+- [x] Same validation as the CLI (reject root, Default Cloud User names, system accounts; `--port` with skip-firewall rejected).
+- [x] Private key never appears in the TUI frame, the Hardening log or the action log.
+- [x] The raw-key display is a reusable piece (used again by 17).
+- [x] Stopping at the gate behaves like CLI exit 3: pre-run SSH restored, banner stays.
+- [x] After success the banner disappears without restarting the TUI.
+- [x] `teatest`: wizard happy path with scripted host; gate stop path.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ 77edc5d (merge). Review fixes in b136567.

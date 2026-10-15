@@ -4,10 +4,14 @@
 
 **Blocked by:** 10, 12
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] List reads live unit state; filter and toggle tested.
-- [ ] Each action shows the resulting state or the systemctl error.
-- [ ] Protected Unit refusals unit-tested in the guard and shown with a reason in the TUI.
-- [ ] Global lock + action-log line per mutation.
-- [ ] `teatest`: restart a Service; refused stop of ssh.
+- [x] List reads live unit state; filter and toggle tested.
+- [x] Each action shows the resulting state or the systemctl error.
+- [x] Protected Unit refusals unit-tested in the guard and shown with a reason in the TUI.
+- [x] Global lock + action-log line per mutation.
+- [x] `teatest`: restart a Service; refused stop of ssh.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ bc809b0 (merge). Review fixes in b136567.

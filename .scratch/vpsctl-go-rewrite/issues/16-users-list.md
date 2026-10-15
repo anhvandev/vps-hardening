@@ -4,8 +4,12 @@
 
 **Blocked by:** 10
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Sudo state reflects the per-user passwordless rule vpsctl manages and admin-group membership.
-- [ ] Locked state covers both password lock and nologin shell.
-- [ ] Tests with fixture passwd/group/sudoers and scripted commands; one `teatest` render.
+- [x] Sudo state reflects the per-user passwordless rule vpsctl manages and admin-group membership.
+- [x] Locked state covers both password lock and nologin shell.
+- [x] Tests with fixture passwd/group/sudoers and scripted commands; one `teatest` render.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ 3c18362 (merge). Review fixes in b136567.

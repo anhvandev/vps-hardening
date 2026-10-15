@@ -4,10 +4,14 @@
 
 **Blocked by:** 12, 13
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Reuses the existing SSH change flow; no second implementation of staging or rollback.
-- [ ] Holds the global lock for the whole change; writes action-log lines for start and outcome.
-- [ ] Any failure after the first mutation restores the snapshot; the TUI shows what was restored.
-- [ ] Lockout Guard refuses a port already used by another Listening Port.
-- [ ] `teatest`: successful change through the gate; "Stop safely" path leaves the old port allowed and listening (scripted).
+- [x] Reuses the existing SSH change flow; no second implementation of staging or rollback.
+- [x] Holds the global lock for the whole change; writes action-log lines for start and outcome.
+- [x] Any failure after the first mutation restores the snapshot; the TUI shows what was restored.
+- [x] Lockout Guard refuses a port already used by another Listening Port.
+- [x] `teatest`: successful change through the gate; "Stop safely" path leaves the old port allowed and listening (scripted).
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ 13a4b55 (merge). Review fixes in b136567.

@@ -4,9 +4,13 @@
 
 **Blocked by:** 09, 10
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] fail2ban not installed or inactive shows a clear state.
-- [ ] Ignore-list change persists in vpsctl's jail drop-in and takes effect after reload; existing entries kept.
-- [ ] IP/CIDR validated.
-- [ ] Global lock + action-log line per mutation.
+- [x] fail2ban not installed or inactive shows a clear state.
+- [x] Ignore-list change persists in vpsctl's jail drop-in and takes effect after reload; existing entries kept.
+- [x] IP/CIDR validated.
+- [x] Global lock + action-log line per mutation.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ f149533 (merge). Review fixes in b136567.

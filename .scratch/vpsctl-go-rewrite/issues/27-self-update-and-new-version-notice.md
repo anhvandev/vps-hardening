@@ -4,9 +4,13 @@
 
 **Blocked by:** 10
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Checksum mismatch or download failure leaves the current binary untouched.
-- [ ] Same asset names and checksum file as the installer.
-- [ ] Version check failure (offline) is silent in the TUI.
-- [ ] Takes the global lock; action-log line with old → new version.
+- [x] Checksum mismatch or download failure leaves the current binary untouched.
+- [x] Same asset names and checksum file as the installer.
+- [x] Version check failure (offline) is silent in the TUI.
+- [x] Takes the global lock; action-log line with old → new version.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ 085cf78 (merge). Review fixes in b136567.

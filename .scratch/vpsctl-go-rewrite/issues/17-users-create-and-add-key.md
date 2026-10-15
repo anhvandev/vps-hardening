@@ -4,10 +4,14 @@
 
 **Blocked by:** 09, 15, 16
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Name validation as for the Admin User; existing names and system accounts rejected.
-- [ ] Pasted keys are validated as public keys before install; duplicates are not added twice.
-- [ ] authorized_keys ownership/permissions/SELinux context correct (reuse existing key install).
-- [ ] Global lock + action-log line per mutation; key material never logged.
-- [ ] Generated key material removed on every path, including failures.
+- [x] Name validation as for the Admin User; existing names and system accounts rejected.
+- [x] Pasted keys are validated as public keys before install; duplicates are not added twice.
+- [x] authorized_keys ownership/permissions/SELinux context correct (reuse existing key install).
+- [x] Global lock + action-log line per mutation; key material never logged.
+- [x] Generated key material removed on every path, including failures.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ fd49a0f (merge). Review fixes in b136567.

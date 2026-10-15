@@ -4,11 +4,15 @@
 
 **Blocked by:** 09, 11
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Input validation: port 1–65535, range start ≤ end, proto tcp|udp, valid IP/CIDR; errors shown inline.
-- [ ] Removing a rule touches only that rule; unrelated rules survive (test with 80/tcp, 443/tcp, a source-limited rule).
-- [ ] Lockout Guard is a pure function (facts + proposed action → allow | refuse with reason), unit-tested without any command seam; refusal reason shown in the TUI. No override.
-- [ ] Lock busy → the action is refused with "locked by <name> (pid N)"; reading still works.
-- [ ] Each successful or failed mutation appends one action-log line.
-- [ ] `teatest`: open a port, refused SSH-port removal.
+- [x] Input validation: port 1–65535, range start ≤ end, proto tcp|udp, valid IP/CIDR; errors shown inline.
+- [x] Removing a rule touches only that rule; unrelated rules survive (test with 80/tcp, 443/tcp, a source-limited rule).
+- [x] Lockout Guard is a pure function (facts + proposed action → allow | refuse with reason), unit-tested without any command seam; refusal reason shown in the TUI. No override.
+- [x] Lock busy → the action is refused with "locked by <name> (pid N)"; reading still works.
+- [x] Each successful or failed mutation appends one action-log line.
+- [x] `teatest`: open a port, refused SSH-port removal.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ b5cd39f (merge). Review fixes in b136567.

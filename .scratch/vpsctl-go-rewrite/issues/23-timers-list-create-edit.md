@@ -4,8 +4,12 @@
 
 **Blocked by:** 22
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Schedule validated before saving (systemd calendar syntax); next run shown after creation.
-- [ ] Editing a packaged Timer uses an override; revert works.
-- [ ] Global lock + action-log line per mutation.
+- [x] Schedule validated before saving (systemd calendar syntax); next run shown after creation.
+- [x] Editing a packaged Timer uses an override; revert works.
+- [x] Global lock + action-log line per mutation.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ a2a05ea (merge). Review fixes in b136567.

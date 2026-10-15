@@ -4,8 +4,12 @@
 
 **Blocked by:** 10
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Effective values come from the live daemon; Match-overridden settings are detected by comparing the global result with the per-user probe for Managed Users.
-- [ ] Active sessions list includes the operator's own session, marked as such.
-- [ ] Tests with scripted `sshd -T` / session output, including a Match block that re-enables password auth.
+- [x] Effective values come from the live daemon; Match-overridden settings are detected by comparing the global result with the per-user probe for Managed Users.
+- [x] Active sessions list includes the operator's own session, marked as such.
+- [x] Tests with scripted `sshd -T` / session output, including a Match block that re-enables password auth.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ b587102 (merge). Review fixes in b136567.

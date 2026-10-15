@@ -4,9 +4,13 @@
 
 **Blocked by:** 21
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Name validated and must not collide with an existing unit.
-- [ ] Generated unit verified before it becomes active; failure leaves no unit behind.
-- [ ] Enable + start result shown; failure points to the journal view.
-- [ ] Global lock + action-log line.
+- [x] Name validated and must not collide with an existing unit.
+- [x] Generated unit verified before it becomes active; failure leaves no unit behind.
+- [x] Enable + start result shown; failure points to the journal view.
+- [x] Global lock + action-log line.
+
+## Comments
+
+Resolved on `feat/vpsctl-tui` @ a8827c9 (merge). Review fixes in b136567.
