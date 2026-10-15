@@ -159,7 +159,7 @@ func TestSSHPortChangeStopSafelyRestores(t *testing.T) {
 	if sim.listening != 22 || !slices.Equal(sim.ufw, []string{"ufw allow 22/tcp", "ufw allow 80/tcp"}) || string(after) != string(before) {
 		t.Errorf("listening %d, rules %q, drop-in %q", sim.listening, sim.ufw, after)
 	}
-	if log := actionLog(t, h); !strings.Contains(log, "ssh port 2222: failed: stopped at the Verify Gate") {
+	if log := actionLog(t, h); !strings.Contains(log, "ssh port 2222: stopped\n") {
 		t.Errorf("action log:\n%s", log)
 	}
 }

@@ -4,12 +4,14 @@ package tui
 // operator's SSH session.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
+	"github.com/anhvandev/vpsctl/internal/harden"
 )
 
 // logMutation takes the global lock under root, runs do and appends one
@@ -25,10 +27,14 @@ func logMutation(root, action string, do func() error) error {
 	return err
 }
 
-// appendLog appends action's action-log line under root: ok, or failed with err.
+// appendLog appends action's action-log line under root: ok, stopped (at the
+// Verify Gate, as the CLI logs it), or failed with err.
 func appendLog(root, action string, err error) {
 	result := "ok"
-	if err != nil {
+	switch {
+	case errors.Is(err, harden.ErrStopped):
+		result = "stopped"
+	case err != nil:
 		result = "failed: " + err.Error()
 	}
 	actionlog.Append(filepath.Join(root, actionlog.LogPath), action, result) // failures to log are ignored

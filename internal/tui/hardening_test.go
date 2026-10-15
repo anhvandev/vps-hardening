@@ -199,7 +199,7 @@ func TestHardeningWizardStopAtGate(t *testing.T) {
 	if string(after) != string(before) || sim.listening != 22 {
 		t.Errorf("drop-in %q, listening %d", after, sim.listening)
 	}
-	if al := actionLog(t, h); !strings.Contains(al, "harden --user alice: failed: stopped at the Verify Gate") {
+	if al := actionLog(t, h); !strings.Contains(al, "harden --user alice: stopped\n") {
 		t.Errorf("action log:\n%s", al)
 	}
 }
