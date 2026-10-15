@@ -23,7 +23,7 @@ func overviewHost(t *testing.T) *testHost {
 	h.fake.Results["systemctl list-timers --all --plain --no-legend --no-pager"] = system.Result{Stdout: "" +
 		"Thu 2026-10-15 03:00:00 UTC 5h left Wed 2026-10-14 03:00:00 UTC 18h ago backup.timer backup.service\n"}
 	h.fake.Results["systemctl list-unit-files --type=timer --plain --no-legend --no-pager"] = system.Result{Stdout: "backup.timer enabled enabled\n"}
-	h.fake.Results["apt-get -s -o Debug::NoLocking=true upgrade"] = system.Result{Stdout: "" +
+	h.fake.Results["apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade"] = system.Result{Stdout: "" +
 		"Inst openssl [3.0.13-0ubuntu3.4] (3.0.13-0ubuntu3.5 Ubuntu:24.04/noble-security [amd64])\n" +
 		"Inst vim [2:9.1.0016-1ubuntu7.3] (2:9.1.0016-1ubuntu7.4 Ubuntu:24.04/noble-updates [amd64])\n" +
 		"Inst curl [8.5.0-2ubuntu10.4] (8.5.0-2ubuntu10.5 Ubuntu:24.04/noble-updates [amd64])\n"}
@@ -52,7 +52,7 @@ func TestOverviewCards(t *testing.T) {
 func TestOverviewMissingDataIsAState(t *testing.T) {
 	h := debianHost(t)
 	h.fake.Results["ufw status"] = system.Result{Stdout: "Status: inactive\n"}
-	delete(h.fake.Results, "apt-get -s -o Debug::NoLocking=true upgrade")
+	delete(h.fake.Results, "apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade")
 	delete(h.fake.Results, "fail2ban-client status")
 	tm := start(h)
 	waitFor(t, tm, "Uptime")

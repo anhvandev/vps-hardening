@@ -40,7 +40,7 @@ func debianHost(t *testing.T) *testHost {
 				"ufw allow 22/tcp\nufw allow 80/tcp\nufw allow from 10.0.0.0/8 to any port 5432 proto tcp\n"},
 			"fail2ban-client status": {Stdout: "Status\n|- Number of jail:\t1\n`- Jail list:\tsshd\n"},
 			"systemctl show -p LastTriggerUSec --value apt-daily-upgrade.timer": {Stdout: "Wed 2026-10-14 06:12:03 UTC\n"},
-			"apt-get -s -o Debug::NoLocking=true upgrade":                       {Stdout: "Reading package lists...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"},
+			"apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade":       {Stdout: "Reading package lists...\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n"},
 			"df -h -P /": {Stdout: "Filesystem      Size  Used Avail Capacity Mounted on\n/dev/vda1        20G  4.1G   15G      22% /\n"},
 			"sshd -T":    {Stdout: "port 22\npasswordauthentication no\nkbdinteractiveauthentication no\npubkeyauthentication yes\npermitrootlogin no\n"},
 		}},

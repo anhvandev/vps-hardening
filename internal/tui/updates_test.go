@@ -18,9 +18,9 @@ import (
 
 const (
 	aptRefresh  = "env DEBIAN_FRONTEND=noninteractive apt-get update"
-	aptSimulate = "apt-get -s -o Debug::NoLocking=true upgrade"
+	aptSimulate = "apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade"
 	aptSecurity = "env DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold --only-upgrade openssl"
-	aptAll      = "env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::=--force-confold"
+	aptAll      = "env DEBIAN_FRONTEND=noninteractive apt-get --with-new-pkgs upgrade -y -o Dpkg::Options::=--force-confold"
 )
 
 // updatesHost is debianHost with one security and one other update pending

@@ -19,7 +19,7 @@ const aptSim = "Reading package lists...\nBuilding dependency tree...\n" +
 	"Inst tzdata [2024a-3ubuntu1.1] (2025b-0ubuntu0.24.04 Ubuntu:24.04/noble-updates [all])\n" +
 	"Conf libnss-systemd (255.4-1ubuntu8.18 Ubuntu:24.04/noble-security [amd64])\n"
 
-const aptSimCmd = "apt-get -s -o Debug::NoLocking=true upgrade"
+const aptSimCmd = "apt-get -s --with-new-pkgs -o Debug::NoLocking=true upgrade"
 
 func TestAptList(t *testing.T) {
 	f := &system.Fake{Results: map[string]system.Result{aptSimCmd: {Stdout: aptSim}}}
@@ -95,7 +95,7 @@ func TestDnfListError(t *testing.T) {
 // or lets dnf pick them by advisory; installing all upgrades everything.
 func TestInstall(t *testing.T) {
 	aptSec := "env DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold --only-upgrade libnss-systemd perl-base curl"
-	aptAll := "env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -o Dpkg::Options::=--force-confold"
+	aptAll := "env DEBIAN_FRONTEND=noninteractive apt-get --with-new-pkgs upgrade -y -o Dpkg::Options::=--force-confold"
 	for _, c := range []struct {
 		manager  string
 		security bool
@@ -114,6 +114,19 @@ func TestInstall(t *testing.T) {
 		if !slices.Equal(f.Calls, c.want) {
 			t.Errorf("%s security=%v ran %q, want %q", c.manager, c.security, f.Calls, c.want)
 		}
+	}
+}
+
+// A security kernel update is a new package pulled in by its metapackage:
+// apt names the upgraded metapackage only, and installs the new kernel with
+// it (never kept back, nothing removed).
+func TestAptInstallSecurityKernel(t *testing.T) {
+	sec := "env DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold --only-upgrade linux-image-generic"
+	f := &system.Fake{Results: map[string]system.Result{sec: {}, aptSimCmd: {Stdout: "" +
+		"Inst linux-image-6.8.0-50-generic (6.8.0-50.51 Ubuntu:24.04/noble-security [amd64])\n" +
+		"Inst linux-image-generic [6.8.0-49.49] (6.8.0-50.51 Ubuntu:24.04/noble-security [amd64])\n"}}}
+	if err := Install(f, "apt", true); err != nil || !slices.Equal(f.Calls, []string{aptSimCmd, sec}) {
+		t.Errorf("ran %q, %v", f.Calls, err)
 	}
 }
 

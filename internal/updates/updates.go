@@ -62,8 +62,8 @@ func Install(r system.Runner, manager string, security bool) error {
 		}
 		args := append(append(append(apt, "install"), keep...), "--only-upgrade")
 		n := len(args)
-		for _, p := range ps {
-			if p.Security {
+		for _, p := range ps { // a new package (a kernel) comes in with the one it is pulled by
+			if p.Security && p.Current != "" {
 				args = append(args, p.Name)
 			}
 		}
@@ -71,7 +71,7 @@ func Install(r system.Runner, manager string, security bool) error {
 			_, err = run(r, "env", args...)
 		}
 	default:
-		_, err = run(r, "env", append(append(apt, "upgrade"), keep...)...)
+		_, err = run(r, "env", append(append(apt, "--with-new-pkgs", "upgrade"), keep...)...)
 	}
 	return err
 }
@@ -101,10 +101,11 @@ func RebootNeeded(r system.Runner, root, manager string) (needed, known bool, ke
 // aptInst is a simulated upgrade's "Inst name [cur] (new origins [arch])".
 var aptInst = regexp.MustCompile(`^Inst (\S+) (?:\[(\S+)\] )?\((\S+) (.+) \[(\S+)\]\)`)
 
-// aptList is what `apt-get upgrade` would install. Security means an origin
-// in a -security suite (noble-security, bookworm-security, …).
+// aptList is what `apt-get --with-new-pkgs upgrade` would install: new
+// packages too (a new kernel is not kept back), never a removal. Security
+// means an origin in a -security suite (noble-security, bookworm-security, …).
 func aptList(r system.Runner) ([]Package, error) {
-	out, err := run(r, "apt-get", "-s", "-o", "Debug::NoLocking=true", "upgrade")
+	out, err := run(r, "apt-get", "-s", "--with-new-pkgs", "-o", "Debug::NoLocking=true", "upgrade")
 	if err != nil {
 		return nil, err
 	}
