@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -330,6 +331,56 @@ func TestLookupReadsPasswdEntry(t *testing.T) {
 	}
 	if _, ok, err := m.Lookup("bob"); ok || err != nil {
 		t.Fatalf("Lookup(bob) = %v, %v; want absent, no error", ok, err)
+	}
+}
+
+// Managed Users: UID ≥ 1000 humans only; sudo from vpsctl's per-user rule or
+// the admin group; keys counted from authorized_keys; locked by password lock,
+// expiry or a nologin shell. A key-only user's never-set "!" is not a lock.
+func TestManagedUsersListsHumansWithSudoKeysAndLock(t *testing.T) {
+	root := t.TempDir()
+	write := func(p, s string) {
+		os.MkdirAll(filepath.Dir(filepath.Join(root, p)), 0o755)
+		os.WriteFile(filepath.Join(root, p), []byte(s), 0o600)
+	}
+	write("/etc/sudoers.d/99-vpsctl-alice", "alice ALL=(ALL:ALL) NOPASSWD: ALL\n")
+	write("/home/alice/.ssh/authorized_keys", "ssh-ed25519 AAAA a@laptop\n\n# old phone\nssh-ed25519 BBBB a@desk\n")
+	write("/home/bob/.ssh/authorized_keys", "ssh-ed25519 CCCC bob\n")
+	fake := &system.Fake{Results: map[string]system.Result{
+		"getent passwd": {Stdout: "root:x:0:0:root:/root:/bin/bash\n" +
+			"daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n" +
+			"alice:x:1000:1000::/home/alice:/bin/bash\n" +
+			"bob:x:1001:1001::/home/bob:/bin/bash\n" +
+			"ubuntu:x:1002:1002::/home/ubuntu:/usr/sbin/nologin\n" +
+			"carol:x:1003:1003::/home/carol:/bin/bash\n" +
+			"dave:x:1004:27::/home/dave:/bin/bash\n" +
+			"erin:x:1005:1005::/home/erin:/bin/bash\n" +
+			"nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n"},
+		"getent group": {Stdout: "root:x:0:\nsudo:x:27:bob,ubuntu\nalice:x:1000:\n"},
+		"getent shadow": {Stdout: "root:*:19000:0:99999:7:::\n" +
+			"alice:!:19000:0:99999:7:::\n" +
+			"bob:!:19000:0:99999:7:::\n" +
+			"ubuntu:!!:19000:0:99999:7:::\n" +
+			"carol:!$6$salt$hash:19000:0:99999:7:::\n" +
+			"dave:!:19000:0:99999:7:::\n" +
+			"erin:!:19000:0:99999:7::1:\n"},
+	}}
+	m := &Manager{R: fake, Host: system.Host{Family: "debian", AdminGroup: "sudo"}, Root: root}
+
+	got, err := m.ManagedUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ManagedUser{
+		{Name: "alice", UID: 1000, Home: "/home/alice", Sudo: true, Keys: 2},
+		{Name: "bob", UID: 1001, Home: "/home/bob", Sudo: true, Keys: 1},
+		{Name: "ubuntu", UID: 1002, Home: "/home/ubuntu", Sudo: true, Locked: true},
+		{Name: "carol", UID: 1003, Home: "/home/carol", Locked: true},
+		{Name: "dave", UID: 1004, Home: "/home/dave", Sudo: true},
+		{Name: "erin", UID: 1005, Home: "/home/erin", Locked: true},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ManagedUsers() =\n%+v\nwant\n%+v", got, want)
 	}
 }
 

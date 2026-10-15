@@ -157,6 +157,34 @@ func TestUnbuiltModulesMarkedComingSoon(t *testing.T) {
 	}
 }
 
+func TestUsersScreenListsManagedUsers(t *testing.T) {
+	t.Setenv("SUDO_USER", "alice")
+	h := debianHost(t)
+	h.fake.Results["getent passwd"] = system.Result{Stdout: "root:x:0:0:root:/root:/bin/bash\n" +
+		"daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n" +
+		"alice:x:1000:1000::/home/alice:/bin/bash\n" +
+		"bob:x:1001:1001::/home/bob:/usr/sbin/nologin\n"}
+	h.fake.Results["getent group"] = system.Result{Stdout: "sudo:x:27:\n"}
+	h.fake.Results["getent shadow"] = system.Result{Stdout: "alice:!:19000:0:99999:7:::\nbob:!:19000:0:99999:7:::\n"}
+	h.write("/etc/sudoers.d/99-vpsctl-alice", "alice ALL=(ALL:ALL) NOPASSWD: ALL\n")
+	h.write("/home/alice/.ssh/authorized_keys", "ssh-ed25519 AAAA a\nssh-ed25519 BBBB b\n")
+
+	tm := start(h)
+	waitFor(t, tm, "RAM")
+	tm.Type("jjjj")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "LOCKED")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	v := quitView(t, tm)
+	wantAll(t, v, "NAME", "SUDO", "KEYS", "LOCKED",
+		"alice (you)  yes   2     no",
+		"bob          no    0     yes")
+	if strings.Contains(v, "daemon") {
+		t.Errorf("system account shown:\n%s", v)
+	}
+}
+
 func TestOverviewOnRhelHost(t *testing.T) {
 	h := &testHost{t: t, root: t.TempDir(),
 		host: system.Host{DistroID: "rocky", Version: "9.4", Family: "rhel", Supported: true,
