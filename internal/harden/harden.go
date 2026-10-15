@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/anhvandev/vpsctl/internal/firewall"
+	"github.com/anhvandev/vpsctl/internal/sshd"
 	"github.com/anhvandev/vpsctl/internal/system"
 )
 
@@ -301,7 +302,7 @@ func changeSSH(o Options, fw firewall.Backend, h Host, out io.Writer, ask func(q
 		if rerr := c.Restore(); rerr != nil {
 			return fmt.Errorf("%w; restore also failed: %w", err, rerr)
 		}
-		return fmt.Errorf("%w (restored pre-run SSH state)", err)
+		return fmt.Errorf("%w (%w)", err, sshd.ErrRestored)
 	}
 
 	if p.StageBLive && p.Port == p.OldPort {

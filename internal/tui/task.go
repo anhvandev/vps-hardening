@@ -27,6 +27,7 @@ import (
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/harden"
+	"github.com/anhvandev/vpsctl/internal/sshd"
 	"github.com/anhvandev/vpsctl/internal/system"
 )
 
@@ -418,15 +419,18 @@ func (t Model) taskStatus() string {
 // the output, cw columns wide.
 func (t Model) result(cw int) (state string, body []string) {
 	k := t.task
-	if errors.Is(k.err, harden.ErrStopped) {
-		state = warnStyle.Render(glyph("⚠") + " Stopped")
-		reason := fmt.Sprintf("step %d/%d %q: %s", k.cur+1, len(k.steps), k.steps[k.cur], k.err)
-		return state, strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")
-	}
 	if k.err != nil {
 		state = errStyle.Render(glyph("✗") + " Failed")
+		if errors.Is(k.err, harden.ErrStopped) {
+			state = warnStyle.Render(glyph("⚠") + " Stopped")
+		}
 		reason := fmt.Sprintf("step %d/%d %q: %s", k.cur+1, len(k.steps), k.steps[k.cur], k.err)
-		return state, strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")
+		body = strings.Split(lipgloss.NewStyle().Width(cw).Render(reason), "\n")
+		if errors.Is(k.err, sshd.ErrRestored) { // only a step that really rolled back says so
+			body = append(body, map[bool]string{true: "Nothing changed (rolled back).",
+				false: fmt.Sprintf("Nothing changed after step %d (rolled back).", k.cur)}[k.cur == 0])
+		}
+		return state, body
 	}
 	state = okStyle.Render(glyph("✓") + " Done in " + mmss(k.end.Sub(k.start)))
 	if len(k.warned) > 0 {

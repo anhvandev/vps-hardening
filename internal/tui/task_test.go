@@ -154,6 +154,9 @@ func TestTaskOutputKeepsQuietErrorsOut(t *testing.T) {
 	waitFor(t, tm, "s3cret")
 	v := ctrlCView(t, tm)
 	wantAll(t, v, "Failed", `step 1/1 "Install crontab"`)
+	if strings.Contains(v, "rolled back") { // nothing was rolled back
+		t.Errorf("claims a roll back:\n%s", v)
+	}
 
 	log := actionLog(t, h)
 	if strings.Contains(log, "s3cret") || !strings.Contains(log, "cron add root: failed\n") {

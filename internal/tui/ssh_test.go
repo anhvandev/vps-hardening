@@ -168,7 +168,7 @@ func TestSSHPortChangeStopSafelyRestores(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "restored pre-run SSH state")
 	v := ctrlCView(t, tm)
-	wantAll(t, v, "Stopped", "SSH stays on port 22")
+	wantAll(t, v, "Stopped", "SSH stays on port 22", "Nothing changed after step 1 (rolled back).")
 	after, _ := os.ReadFile(filepath.Join(h.root, "/etc/ssh/sshd_config.d/00-vpsctl.conf"))
 	if sim.listening != 22 || !slices.Equal(sim.ufw, []string{"ufw allow 22/tcp", "ufw allow 80/tcp"}) || string(after) != string(before) {
 		t.Errorf("listening %d, rules %q, drop-in %q", sim.listening, sim.ufw, after)
