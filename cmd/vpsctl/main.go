@@ -13,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
 	"github.com/anhvandev/vpsctl/internal/tui"
@@ -21,10 +22,10 @@ import (
 // version is set at build time: -ldflags "-X main.version=v1.2.3".
 var version = "dev"
 
-const (
-	lockPath = "/run/vpsctl.lock"
-	logDir   = "/var/log/vpsctl"
-)
+const logDir = "/var/log/vpsctl"
+
+// lock takes the shared global mutation lock.
+var lock = actionlog.Lock
 
 const usage = `usage: vpsctl                 (management TUI)
        vpsctl harden --user NAME [--port N] [--yes] [--key-out PATH] [--rotate-key]
@@ -76,7 +77,7 @@ func runHarden(args []string) int {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
 	}
-	lk, err := lock(lockPath)
+	lk, err := lock(actionlog.LockPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
@@ -108,7 +109,7 @@ func runHarden(args []string) int {
 		fmt.Fprintln(errOut, "ERROR:", err)
 		result, code = "failed", 1
 	}
-	logAction("harden "+strings.Join(args, " "), result)
+	actionlog.Append(actionlog.LogPath, "harden "+strings.Join(args, " "), result) // failures to log are ignored
 	return code
 }
 
@@ -150,37 +151,4 @@ func ask(tty *os.File, question string) (bool, error) {
 	}
 	a := strings.ToLower(strings.TrimSpace(line))
 	return a == "y" || a == "yes", nil
-}
-
-// lock takes the global mutation lock at path; the kernel drops it when the process exits.
-func lock(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		holder, _ := io.ReadAll(f)
-		f.Close()
-		return nil, fmt.Errorf("locked by %s", strings.TrimSpace(string(holder)))
-	}
-	f.Truncate(0)
-	fmt.Fprintf(f, "%s (pid %d)\n", operator(), os.Getpid())
-	return f, nil
-}
-
-// logAction appends one line to the action log; failures to log are ignored.
-func logAction(action, result string) {
-	f, err := os.OpenFile(logDir+"/actions.log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	fmt.Fprintf(f, "%s %s %s: %s\n", time.Now().Format(time.RFC3339), operator(), action, result)
-}
-
-func operator() string {
-	if u := os.Getenv("SUDO_USER"); u != "" {
-		return u
-	}
-	return "root"
 }
