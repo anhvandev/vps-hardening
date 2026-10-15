@@ -2,7 +2,6 @@ package tui
 
 import (
 	"io"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -129,6 +128,7 @@ func openFirewall(t *testing.T, h *testHost) *teatest.TestModel {
 	h.fake.Results["ss -Hltun"] = ssOut
 	h.fake.Results["sshd -T"] = system.Result{Stdout: "port 22\n"}
 	h.write("/etc/ssh/ssh_host_ed25519_key", "k")
+	h.write("/run/.keep", "") // the lock lives under /run
 	tm := start(h)
 	waitFor(t, tm, "RAM")
 	tm.Type("jj")
@@ -158,12 +158,6 @@ func press(s tea.Model, keys string) tea.Model {
 	return s
 }
 
-// actionLog is the action log written under h's root ("" if none).
-func actionLog(h *testHost) string {
-	b, _ := os.ReadFile(filepath.Join(h.root, actionlog.LogPath))
-	return string(b)
-}
-
 // mutations is every firewall-changing command h ran.
 func mutations(h *testHost) []string {
 	var cmds []string
@@ -186,7 +180,7 @@ func TestFirewallOpenPort(t *testing.T) {
 	if got := mutations(h); !slices.Equal(got, []string{"ufw allow from 10.0.0.0/8 to any port 6000:6100 proto udp"}) {
 		t.Errorf("ran %q", got)
 	}
-	if log := actionLog(h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall open 6000-6100/udp from 10.0.0.0/8: ok") {
+	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall open 6000-6100/udp from 10.0.0.0/8: ok") {
 		t.Errorf("action log:\n%s", log)
 	}
 }
@@ -200,7 +194,7 @@ func TestFirewallRefusesRemovingSSHPortRule(t *testing.T) {
 	if got := mutations(h); len(got) != 0 {
 		t.Errorf("ran %q", got)
 	}
-	if log := actionLog(h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall remove 22/tcp: failed: refused") {
+	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall remove 22/tcp: failed: refused") {
 		t.Errorf("action log:\n%s", log)
 	}
 }
@@ -217,6 +211,7 @@ func TestFirewallRemovesOnlySelectedRule(t *testing.T) {
 	}
 	h.fake.Results["sshd -T"] = system.Result{Stdout: "port 22\n"}
 	h.write("/etc/ssh/ssh_host_ed25519_key", "k")
+	h.write("/run/.keep", "")
 	s := screens["Firewall"](harden.NewMachine(h.fake, h.host, h.root, io.Discard))
 	s, _ = s.Update(s.Init()())
 	for _, step := range [][2]string{{"jjd", "removed 443/tcp"}, {"jd", "removed 5432/tcp from 10.0.0.0/8"}, {"kkd", "removed 80/tcp"}} {
@@ -227,7 +222,7 @@ func TestFirewallRemovesOnlySelectedRule(t *testing.T) {
 	if got := mutations(h); !slices.Equal(got, want) {
 		t.Errorf("ran %q, want %q", got, want)
 	}
-	if log := actionLog(h); strings.Count(log, ": ok\n") != 3 {
+	if log := actionLog(t, h); strings.Count(log, ": ok\n") != 3 {
 		t.Errorf("action log:\n%s", log)
 	}
 }
@@ -258,7 +253,7 @@ func TestFirewallOpenValidatesInput(t *testing.T) {
 	if got := mutations(h); len(got) != 0 {
 		t.Errorf("ran %q", got)
 	}
-	if log := actionLog(h); log != "" {
+	if log := actionLog(t, h); log != "" {
 		t.Errorf("action log:\n%s", log)
 	}
 }
@@ -281,7 +276,7 @@ func TestFirewallLockBusy(t *testing.T) {
 	if got := mutations(h); len(got) != 0 {
 		t.Errorf("ran %q", got)
 	}
-	if log := actionLog(h); log != "" {
+	if log := actionLog(t, h); log != "" {
 		t.Errorf("action log:\n%s", log)
 	}
 }
@@ -295,7 +290,7 @@ func TestFirewallFailedOpenIsLogged(t *testing.T) {
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	waitFor(t, tm, "ERROR: boom")
 	closeFirewall(t, tm)
-	if log := actionLog(h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall open 8080/tcp: failed: ") {
+	if log := actionLog(t, h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall open 8080/tcp: failed: ") {
 		t.Errorf("action log:\n%s", log)
 	}
 }

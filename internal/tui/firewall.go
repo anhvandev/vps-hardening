@@ -132,11 +132,11 @@ func (f firewallScreen) remove(r firewall.Rule) tea.Cmd {
 	})
 }
 
-// change runs do on the host firewall through mutate; the screen then shows
+// change runs do on the host firewall through logMutation; the screen then shows
 // done or the error, and reloads.
 func (f firewallScreen) change(action, done string, do func(firewall.Backend) error) tea.Cmd {
 	return func() tea.Msg {
-		err := mutate(f.m, action, func() error {
+		err := logMutation(f.m.Root, action, func() error {
 			fw, err := firewall.New(f.m.Host, f.m.R, f.m.Pkgs)
 			if err != nil {
 				return err
