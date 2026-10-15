@@ -127,7 +127,7 @@ func click(x, y int) tea.MouseClickMsg {
 
 func TestClickSidebarOpensScreen(t *testing.T) {
 	h := sizedHost(t)
-	h.fake.Results["ss -Hltun"] = ssOut
+	h.fake.Results["ss -Hltunp"] = ssOut
 	tm := startSized(h, 120, 40)
 	waitFor(t, tm, "5432/tcp")
 	tm.Send(click(5, 3)) // row 3: SECURITY, Hardening, Firewall
