@@ -58,6 +58,24 @@ func TestDoRunsSystemctl(t *testing.T) {
 	}
 }
 
+// EnableStart enables, then starts; a failed enable starts nothing.
+func TestEnableStart(t *testing.T) {
+	r := &system.Fake{Results: map[string]system.Result{
+		"systemctl enable web.service": {},
+		"systemctl start web.service":  {},
+		"systemctl enable bad.service": {Code: 1, Stderr: "no unit\n"},
+	}}
+	if err := service.EnableStart(r, "web.service"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.EnableStart(r, "bad.service"); err == nil {
+		t.Error("bad enable: no error")
+	}
+	if want := []string{"systemctl enable web.service", "systemctl start web.service", "systemctl enable bad.service"}; !slices.Equal(r.Calls, want) {
+		t.Errorf("calls %q", r.Calls)
+	}
+}
+
 // Every caller gets the Protected Unit rule: a refused action runs nothing.
 func TestDoRefusesProtectedUnits(t *testing.T) {
 	r := &system.Fake{}

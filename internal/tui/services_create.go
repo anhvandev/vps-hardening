@@ -131,12 +131,7 @@ func (s servicesScreen) create(unit string, content []byte) tea.Cmd {
 // the operator is pointed at its journal (the unit is selected).
 func (s servicesScreen) enableStart(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := logMutation(s.m.Root, "service enable+start "+unit, func() error {
-			if err := service.Do(s.m.R, "enable", unit); err != nil {
-				return err
-			}
-			return service.Do(s.m.R, "start", unit)
-		})
+		err := logMutation(s.m.Root, "service enable+start "+unit, func() error { return service.EnableStart(s.m.R, unit) })
 		list, lerr := service.List(s.m.R)
 		status := "enabled and started " + unit
 		if err != nil {

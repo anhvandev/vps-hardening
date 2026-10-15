@@ -121,12 +121,7 @@ func (s timersScreen) create(spec service.TimerSpec) tea.Cmd {
 		err = logMutation(root, "timer create "+unit, func() error { return service.Create(r, root, unit, content) })
 		created := err == nil
 		if created {
-			err = logMutation(root, "timer enable+start "+unit, func() error {
-				if err := service.Do(r, "enable", unit); err != nil {
-					return err
-				}
-				return service.Do(r, "start", unit)
-			})
+			err = logMutation(root, "timer enable+start "+unit, func() error { return service.EnableStart(r, unit) })
 		}
 		list, lerr := service.ListTimers(r)
 		status := "created " + unit + ", next run "
