@@ -78,6 +78,22 @@ func TestOverviewFailedServiceOpensIt(t *testing.T) {
 	ctrlCView(t, tm)
 }
 
+// Clicking "Timers missed" opens Timers on the Timer that missed.
+func TestOverviewMissedTimerOpensIt(t *testing.T) {
+	h := overviewHost(t)
+	h.fake.Results["systemctl list-timers --all --plain --no-legend --no-pager"] = system.Result{Stdout: "" +
+		"Thu 2026-10-15 06:00:00 UTC 8h left Wed 2026-10-14 06:00:00 UTC 16h ago apt-daily.timer apt-daily.service\n" +
+		"Thu 2026-10-15 03:00:00 UTC 5h left Wed 2026-10-14 03:00:00 UTC 18h ago backup.timer backup.service\n"}
+	h.fake.Results["systemctl list-unit-files --type=timer --plain --no-legend --no-pager"] = system.Result{Stdout: "apt-daily.timer enabled enabled\nbackup.timer enabled enabled\n"}
+	tm := start(h)
+	waitFor(t, tm, "Timer missed")
+	tm.Send(overviewClick(50, 13)) // Services card: running, backup, nginx, then the Timers line
+	waitFor(t, tm, "NEXT RUN")
+	if v := ctrlCView(t, tm); !strings.Contains(v, "▌backup.timer") {
+		t.Errorf("backup.timer not selected:\n%s", v)
+	}
+}
+
 // Clicking the Logins line opens Logins.
 func TestOverviewLoginsOpensLogins(t *testing.T) {
 	tm := start(loginsHost(t))
