@@ -1,11 +1,14 @@
 // Package service lists Services and runs lifecycle actions on them through
-// systemctl. Actions on Protected Units are refused here (internal/guard), so
+// systemctl, and reads or follows their journal. Actions on Protected Units are refused here (internal/guard), so
 // every caller gets the Lockout Guard.
 package service
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/anhvandev/vpsctl/internal/guard"
@@ -71,10 +74,26 @@ func Do(r system.Runner, verb, unit string) error {
 	return err
 }
 
-// systemctl runs systemctl args, returning stdout or an error carrying stderr.
-func systemctl(r system.Runner, args ...string) (string, error) {
-	return run(r, "systemctl", args...)
+// Journal reads the last n journal lines of unit, never the whole history.
+func Journal(r system.Runner, unit string, n int) ([]string, error) {
+	out, err := run(r, "journalctl", "-u", unit, "-n", strconv.Itoa(n), "--no-pager")
+	if err != nil {
+		return nil, err
+	}
+	return strings.Split(strings.TrimRight(out, "\n"), "\n"), nil
 }
+
+// Follow streams unit's journal live, starting from its last n lines, until
+// the returned stream is closed (which stops journalctl).
+func Follow(r system.Runner, unit string, n int) (io.ReadCloser, error) {
+	s, ok := r.(system.Streamer)
+	if !ok {
+		return nil, errors.New("live follow not supported by this runner")
+	}
+	return s.Stream("journalctl", "-u", unit, "-n", strconv.Itoa(n), "-f", "--no-pager")
+}
+
+func systemctl(r system.Runner, args ...string) (string, error) { return run(r, "systemctl", args...) }
 
 // run runs name args, returning stdout or an error carrying stderr.
 func run(r system.Runner, name string, args ...string) (string, error) {
