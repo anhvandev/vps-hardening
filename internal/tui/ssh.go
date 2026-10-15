@@ -134,11 +134,9 @@ func (s sshScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "esc":
 		return s, Back
 	case "p":
-		s.changing, s.form = true, newForm("Change the SSH port", "New port")
-		s.form.inputs[0].Placeholder = "1-65535; the Verify Gate follows"
+		s.changing, s.form = true, newForm("Change the SSH port (the Verify Gate follows)", "New port")
 		if system.SessionUser() == "" { // root on the console: who logs in at the gate?
-			s.form = newForm("Change the SSH port", "New port", "Login user")
-			s.form.inputs[1].Placeholder = "the Admin User you will log in as at the Verify Gate"
+			s.form = newForm("Change the SSH port (the Verify Gate follows)", "New port", "Login user at the gate")
 			if i := slices.IndexFunc(s.info.users, user.ManagedUser.Usable); i >= 0 {
 				s.form.inputs[1].SetValue(s.info.users[i].Name)
 			}

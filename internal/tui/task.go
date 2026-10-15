@@ -96,7 +96,8 @@ func taskTerminal(out io.Writer) func() (back func()) {
 }
 
 // taskMachine is m with every command run through r, a step's runner, so
-// they show in the Task's output.
+// they show in the Task's output. Read anything secret-bearing through m
+// instead (ManagedUsers reads shadow).
 func taskMachine(m *harden.Machine, r system.Runner) *harden.Machine {
 	mm, u, s, p := *m, *m.Manager, *m.SSH, *m.Pkgs
 	p.R = r
@@ -115,8 +116,8 @@ type task struct {
 	ended         bool
 	err           error
 	start, end    time.Time
-	shown         bool // the panel is up (else it lives in the status bar)
-	full          bool // the result card shows the output
+	shown         bool         // the panel is up (else it lives in the status bar)
+	full          bool         // the result card shows the output
 	gate          *taskGateMsg // the Verify Gate waiting for its answer
 	works         bool         // at the gate: "Login works" selected
 	events        <-chan tea.Msg

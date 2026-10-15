@@ -173,13 +173,13 @@ func TestUsersScreenListsManagedUsers(t *testing.T) {
 	waitFor(t, tm, "RAM")
 	tm.Type(menuTo("Users"))
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	waitFor(t, tm, "LOCKED")
+	waitFor(t, tm, "STATE")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
 	waitFor(t, tm, "q quit")
 	v := quitView(t, tm)
-	wantAll(t, v, "NAME", "SUDO", "KEYS", "LOCKED",
-		"alice (you)  yes   2     no",
-		"bob          no    0     yes")
+	wantAll(t, v, "USER", "SUDO", "KEYS", "STATE", "2 Managed Users · 1 with sudo",
+		"alice (you)  ●     2     ● active  ◆",
+		"bob          ·     0     ⚠ locked")
 	if strings.Contains(v, "daemon") {
 		t.Errorf("system account shown:\n%s", v)
 	}
