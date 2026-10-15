@@ -260,7 +260,7 @@ func (b blockOn) Run(name string, args ...string) (system.Result, error) {
 // says it is busy and the job carries on to the Verify Gate.
 func TestCtrlCWhileChangeRunsIsIgnored(t *testing.T) {
 	h, sim := portChangeHost(t)
-	r := blockOn{sim, "ss -Hltun", make(chan struct{})}
+	r := blockOn{sim, "ss -Hltunp", make(chan struct{})}
 	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard), time.Now()), teatest.WithInitialTermSize(120, 40))
 	waitFor(t, tm, "RAM")
 	tm.Type(menuTo("SSH"))
@@ -285,7 +285,7 @@ func TestCtrlCWhileChangeRunsIsIgnored(t *testing.T) {
 
 func TestSSHPortChangeRefusesListeningPort(t *testing.T) {
 	h, sim := portChangeHost(t)
-	h.fake.Results["ss -Hltun"] = ssOut // postgres on 5432
+	h.fake.Results["ss -Hltunp"] = ssOut // postgres on 5432
 	tm := changePort(t, h, sim, "5432")
 	waitFor(t, tm, "refused: port 5432 is already a Listening Port")
 	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})

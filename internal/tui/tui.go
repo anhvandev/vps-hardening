@@ -11,7 +11,10 @@
 // time it is opened (so it reads the live system then). While open it gets
 // every message, including every key except ctrl+c (unless its busy() says a
 // gated job runs), and returns the Back
-// command to hand focus back to the menu. Every change to the host goes
+// command to hand focus back to the menu. Its tea.WindowSizeMsg and mouse
+// messages are in its own cells; screens are built on the shared widgets
+// (widgets.go, which also lists the optional keys/typing methods the shell
+// asks). Every change to the host goes
 // through a Task (task.go) or, on screens not moved yet, logMutation (both:
 // global lock + one action-log line); Lockout Guard checks (internal/guard)
 // run inside them, on facts read under the lock.
@@ -75,6 +78,8 @@ var (
 	okStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green: ok
 	errStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // red: error, blocked
 	naStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("8")) // grey: n.a.
+
+	selectedStyle = lipgloss.NewStyle().Reverse(true)
 )
 
 // Model is the TUI shell. Machine is the real host (or a fake one in tests).
@@ -141,6 +146,9 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return t, nil
 	case tea.WindowSizeMsg:
 		t.w, t.h = msg.Width, msg.Height
+		var cmd tea.Cmd
+		t.screen, cmd = t.screen.Update(t.contentSize())
+		return t, cmd
 	case tea.MouseClickMsg:
 		if t.task != nil && t.task.shown { // the panel is modal
 			return t.panelClick(msg), nil
@@ -152,6 +160,24 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if title := t.clicked(msg); title != "" && !t.busy() {
 			return t.open(title)
 		}
+		x, y, ok := t.local(msg.X, msg.Y)
+		if !ok || t.help {
+			return t, nil
+		}
+		t.focused = true // a click into the screen gives it the keys
+		msg.X, msg.Y = x, y
+		var cmd tea.Cmd
+		t.screen, cmd = t.screen.Update(msg)
+		return t, cmd
+	case tea.MouseWheelMsg:
+		x, y, ok := t.local(msg.X, msg.Y)
+		if !ok || t.help || t.task != nil && t.task.shown {
+			return t, nil
+		}
+		msg.X, msg.Y = x, y
+		var cmd tea.Cmd
+		t.screen, cmd = t.screen.Update(msg)
+		return t, cmd
 	case gateMsg:
 		if msg.term != nil { // a job takes the real terminal (raw key display)
 			return t, tea.Batch(tea.Exec(msg.term, nil), msg.wait)
@@ -184,6 +210,19 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !t.focused {
 			return t.menuKey(msg.String())
+		}
+		if s, ok := t.screen.(interface{ typing() bool }); ok && !s.typing() {
+			switch msg.String() { // screens on the shared widgets leave these to the shell
+			case "?":
+				t.help = true
+				return t, nil
+			case "m":
+				t.mouseOff = !t.mouseOff
+				return t, nil
+			case "tab": // to the sidebar
+				t.focused, t.overlay = false, t.w < collapseBelow
+				return t, nil
+			}
 		}
 	}
 	if t.screen == nil {
@@ -243,5 +282,6 @@ func (t Model) open(title string) (tea.Model, tea.Cmd) {
 	t.cursor = slices.Index(items(), title)
 	t.screen, t.focused, t.overlay, t.help = newScreen(t.m), true, false, false
 	t.hardened = t.m.SSH.StageBLive()
+	t.screen, _ = t.screen.Update(t.contentSize())
 	return t, t.screen.Init()
 }

@@ -165,14 +165,14 @@ const helpText = `Keys
   ↑↓ j k   move             enter   open
   esc      back             /       filter
   r        refresh          a d e   add · delete · edit
-  tab      sidebar (narrow terminal)
+  tab      to the sidebar (its overlay on a narrow terminal)
   h        Hardening (while not hardened)
   t        reopen the hidden Task
   m        mouse on/off     ?       this help
   ctrl+c   quit             q       quit (from the sidebar)
 
-Mouse: click a sidebar item, the Hardening badge, or a hidden
-Task in the status bar.
+Mouse: click a sidebar item, the Hardening badge, a hidden Task
+in the status bar, table rows and buttons; the wheel scrolls tables.
 Shift+drag to select text.
 
 any key closes this help`
@@ -201,6 +201,9 @@ func (t Model) status() (left, right string) {
 		right = "any key closes help"
 	case t.focused:
 		right = "esc back · ctrl+c quit"
+		if s, ok := t.screen.(interface{ keys() string }); ok {
+			right = s.keys() + " · ? help"
+		}
 	default:
 		right = "↑↓ move · enter open · m mouse · q quit · ? help"
 		if !t.hardened {
@@ -292,6 +295,28 @@ func (t Model) frame() string {
 	out = append(out, bd.Left+fit(" "+left+rep(" ", gap)+dimStyle.Render(right), inner)+bd.Left)
 	out = append(out, bd.BottomLeft+rep(bd.Top, inner)+bd.BottomRight)
 	return strings.Join(out, "\n")
+}
+
+// content is where the open screen sits: its top-left cell and size.
+func (t Model) content() (x, y, w, h int) {
+	if t.w >= collapseBelow {
+		return sideW + 3, 1, t.w - sideW - 4, t.h - 4
+	}
+	return 2, 3, t.w - 3, t.h - 6 // under the tab bar and a blank line
+}
+
+// contentSize is the size the open screen gets.
+func (t Model) contentSize() tea.WindowSizeMsg {
+	_, _, w, h := t.content()
+	return tea.WindowSizeMsg{Width: w, Height: h}
+}
+
+// local turns terminal cell (x, y) into the open screen's own cell; ok is
+// false outside it (or while the narrow sidebar overlays it).
+func (t Model) local(x, y int) (int, int, bool) {
+	cx, cy, w, h := t.content()
+	x, y = x-cx, y-cy
+	return x, y, t.w >= minW && t.h >= minH && !t.overlay && x >= 0 && y >= 0 && x < w && y < h
 }
 
 // clicked is the menu title a click hits: a sidebar item (when the sidebar
