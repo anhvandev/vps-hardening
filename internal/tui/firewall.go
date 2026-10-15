@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/anhvandev/vpsctl/internal/firewall"
 	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
+	"github.com/anhvandev/vpsctl/internal/system"
 )
 
 func init() { screens["Firewall"] = newFirewall }
@@ -23,7 +25,8 @@ var selectedStyle = lipgloss.NewStyle().Reverse(true)
 
 // firewallScreen lists every Firewall Rule read live from ufw/firewalld (rules
 // added by hand included), each marked with whether a Listening Port backs it.
-// a opens a port or range, d removes the selected rule (Lockout Guard checked).
+// a opens a port or range, d removes the selected rule (Lockout Guard
+// checked); both run as Tasks.
 type firewallScreen struct {
 	m      *harden.Machine
 	loaded bool
@@ -31,11 +34,8 @@ type firewallScreen struct {
 	cursor int    // selected rule
 	adding bool   // the open-a-port prompt is up
 	input  string // what was typed into it
-	status string // outcome of the last action, or an input error
+	status string // an input error
 }
-
-// changedMsg is the outcome of a mutation, shown inline.
-type changedMsg string
 
 type firewallMsg struct {
 	state     string
@@ -60,8 +60,7 @@ func (f firewallScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case firewallMsg:
 		f.fw, f.loaded = msg, true
 		f.cursor = max(min(f.cursor, len(msg.rules)-1), 0)
-	case changedMsg:
-		f.status = string(msg)
+	case taskDoneMsg:
 		return f, f.Init()
 	case tea.KeyPressMsg:
 		if f.adding {
@@ -99,47 +98,38 @@ func (f firewallScreen) promptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return f, nil
 		}
 		f.adding, f.status = false, ""
-		return f, f.change("firewall open "+r.String(), "opened "+r.String(), func(fw firewall.Backend) error {
-			return fw.Allow(r)
-		})
+		return f, runTask("Open port "+r.String(), "firewall open "+r.String(), "opened "+r.String(),
+			f.step("Allow "+r.String(), func(fw firewall.Backend) error { return fw.Allow(r) }))
 	default:
 		f.input += msg.Text
 	}
 	return f, nil
 }
 
-// remove deletes exactly r unless the Lockout Guard refuses, deciding on the
-// SSH port and rules read under the lock.
+// remove deletes exactly r as a Task unless the Lockout Guard refuses,
+// deciding on the SSH port and rules read under the lock.
 func (f firewallScreen) remove(r firewall.Rule) tea.Cmd {
-	return f.change("firewall remove "+r.String(), "removed "+r.String(), func(fw firewall.Backend) error {
-		port, _ := f.m.CurrentPort() // 0 when unknown: the guard refuses
-		rules, err := fw.List()
-		if err != nil {
-			return err
-		}
-		if err := guard.Check(guard.Facts{SSHPort: port, Rules: rules}, guard.RemoveRule{Rule: r}); err != nil {
-			return err
-		}
-		return fw.Remove(r)
-	})
-}
-
-// change runs do on the host firewall through logMutation; the screen then shows
-// done or the error, and reloads.
-func (f firewallScreen) change(action, done string, do func(firewall.Backend) error) tea.Cmd {
-	return func() tea.Msg {
-		err := logMutation(f.m.Root, action, func() error {
-			fw, err := firewall.New(f.m.Host, f.m.R, f.m.Pkgs)
+	return runTask("Remove rule "+r.String(), "firewall remove "+r.String(), "removed "+r.String(),
+		f.step("Lockout Guard check", func(fw firewall.Backend) error {
+			port, _ := f.m.CurrentPort() // 0 when unknown: the guard refuses
+			rules, err := fw.List()
 			if err != nil {
 				return err
 			}
-			return do(fw)
-		})
+			return guard.Check(guard.Facts{SSHPort: port, Rules: rules}, guard.RemoveRule{Rule: r})
+		}),
+		f.step("Remove "+r.String(), func(fw firewall.Backend) error { return fw.Remove(r) }))
+}
+
+// step is a Task step that runs do on the host firewall.
+func (f firewallScreen) step(name string, do func(firewall.Backend) error) taskStep {
+	return taskStep{name, func(r system.Runner, _ io.Writer) error {
+		fw, err := firewall.New(f.m.Host, r, f.m.Pkgs)
 		if err != nil {
-			return changedMsg(err.Error())
+			return err
 		}
-		return changedMsg(done)
-	}
+		return do(fw)
+	}}
 }
 
 // parseRule reads "PORT[-END]/tcp|udp [from IP/CIDR]".

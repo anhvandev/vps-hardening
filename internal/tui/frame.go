@@ -29,7 +29,7 @@ const (
 // ascii is set (in New) when the terminal can't render the status symbols.
 var ascii bool
 
-var asciiGlyph = map[string]string{"●": "*", "✓": "v", "✗": "x", "⚠": "!", "▶": ">", "◆": "#", "▌": ">"}
+var asciiGlyph = map[string]string{"●": "*", "✓": "v", "✗": "x", "⚠": "!", "▶": ">", "◆": "#", "▌": ">", "·": "."}
 
 // glyph is s, or its ASCII stand-in on a terminal that can't render it.
 func glyph(s string) string {
@@ -167,10 +167,12 @@ const helpText = `Keys
   r        refresh          a d e   add · delete · edit
   tab      sidebar (narrow terminal)
   h        Hardening (while not hardened)
+  t        reopen the hidden Task
   m        mouse on/off     ?       this help
   ctrl+c   quit             q       quit (from the sidebar)
 
-Mouse: click a sidebar item or the Hardening badge.
+Mouse: click a sidebar item, the Hardening badge, or a hidden
+Task in the status bar.
 Shift+drag to select text.
 
 any key closes this help`
@@ -180,10 +182,21 @@ func (t Model) status() (left, right string) {
 	if t.busyNote {
 		return "busy: a change is running and quits only once it ends (ctrl+c at the Verify Gate = Stop safely)", ""
 	}
-	if t.newer != "" {
+	switch {
+	case t.refused != "":
+		left = errStyle.Render(t.refused)
+	case t.task != nil && !t.task.shown:
+		left = t.taskStatus()
+	case t.holder != "" && !t.running():
+		left = errStyle.Render("locked by " + t.holder)
+	case t.newer != "":
 		left = "vpsctl " + string(t.newer) + " available: run `sudo vpsctl self-update`"
 	}
 	switch {
+	case t.task != nil && t.task.shown && t.task.ended:
+		right = "enter close · o output"
+	case t.task != nil && t.task.shown:
+		right = "enter hide"
 	case t.help:
 		right = "any key closes help"
 	case t.focused:
@@ -233,6 +246,13 @@ func (t Model) frame() string {
 		content = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Render(helpText)
 	}
 	body := strings.Split(content, "\n")
+	if t.task != nil && t.task.shown { // the Task panel, over the screen
+		cw, rows := inner-1, t.h-6
+		if wide {
+			cw, rows = inner-sideW-2, t.h-4
+		}
+		body = overlay(body, t.panel(min(cw-2, 76), rows-1), 0, 1)
+	}
 	at := func(ls []string, i int) string {
 		if i < len(ls) {
 			return ls[i]

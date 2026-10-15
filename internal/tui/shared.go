@@ -33,19 +33,23 @@ func logMutation(root, action string, do func() error) error {
 // command): the action log gets a bare "failed", the screen the full text.
 type quiet struct{ error }
 
-// appendLog appends action's action-log line under root: ok, stopped (at the
-// Verify Gate, as the CLI logs it), or failed with err (bare if quiet).
+// appendLog appends action's action-log line under root with logResult(err).
 func appendLog(root, action string, err error) {
-	result := "ok"
+	actionlog.Append(filepath.Join(root, actionlog.LogPath), action, logResult(err)) // failures to log are ignored
+}
+
+// logResult is what the log records for err: ok, stopped (at the Verify
+// Gate, as the CLI logs it), or failed with err (bare if quiet).
+func logResult(err error) string {
 	switch {
 	case errors.Is(err, harden.ErrStopped):
-		result = "stopped"
+		return "stopped"
 	case errors.As(err, new(quiet)):
-		result = "failed"
+		return "failed"
 	case err != nil:
-		result = "failed: " + err.Error()
+		return "failed: " + err.Error()
 	}
-	actionlog.Append(filepath.Join(root, actionlog.LogPath), action, result) // failures to log are ignored
+	return "ok"
 }
 
 // dropLast is s without its last rune: backspace in a text field.
