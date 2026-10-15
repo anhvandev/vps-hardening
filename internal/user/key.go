@@ -73,6 +73,20 @@ func (m *Manager) InstallKey(name, keyOut string, rotate, waitSaved bool) error 
 		}
 	}
 
+	if err := m.writeAuthorizedKeys(pw, pub); err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(marker, nil, 0o600)
+}
+
+// writeAuthorizedKeys replaces pw's authorized_keys with keys: .ssh 700 and
+// the file 600, both owned by the user, SELinux context restored.
+func (m *Manager) writeAuthorizedKeys(pw PasswdEntry, keys []byte) error {
+	sshDir := filepath.Join(m.Root, pw.Home, ".ssh")
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		return err
 	}
@@ -82,22 +96,16 @@ func (m *Manager) InstallKey(name, keyOut string, rotate, waitSaved bool) error 
 	if err := os.Chown(sshDir, pw.UID, pw.GID); err != nil {
 		return err
 	}
-	if err := writeAtomic(filepath.Join(sshDir, "authorized_keys"), pub, 0o600, func(tmp string) error {
+	if err := writeAtomic(filepath.Join(sshDir, "authorized_keys"), keys, 0o600, func(tmp string) error {
 		return os.Chown(tmp, pw.UID, pw.GID)
 	}); err != nil {
 		return err
 	}
 	// SELinux: a wrong context on .ssh silently breaks key auth.
 	if m.Host.SELinux {
-		if err := m.run("restorecon", "-R", sshDir); err != nil {
-			return err
-		}
+		return m.run("restorecon", "-R", sshDir)
 	}
-
-	if err := os.MkdirAll(filepath.Dir(marker), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(marker, nil, 0o600)
+	return nil
 }
 
 // waitForSaved re-prompts on tty until the operator types `saved`; EOF or a

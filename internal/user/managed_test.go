@@ -1,6 +1,8 @@
 package user
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,6 +43,69 @@ func TestCreateUserRefusesBadAndExistingNames(t *testing.T) {
 			if !strings.HasPrefix(c, "getent") {
 				t.Fatalf("%q: mutated host: %q", name, h.calls)
 			}
+		}
+	}
+}
+
+const (
+	laptopKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMqUmlD6QmJuWwhjzyNUY8yQ4d4sEujQ+Z4U4gWaFOPI bob@laptop"
+	deskKey   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOiYRgOygAvBxXou9+czedWaVm66qdGEpPASTuWPmPjp bob@desk"
+)
+
+// A pasted public key is appended to authorized_keys (owner-only, SELinux
+// context restored); the same key again is not added twice.
+func TestAddKeyAppendsPastedPublicKeyOnce(t *testing.T) {
+	h := newFakeHost(t)
+	h.addUser("bob", os.Getuid())
+	m := newManager(h, "rhel")
+	m.Host.SELinux = true
+	ak := filepath.Join(h.root, "home/bob/.ssh/authorized_keys")
+	os.MkdirAll(filepath.Dir(ak), 0o755)
+	os.WriteFile(ak, []byte(deskKey), 0o644) // no trailing newline
+
+	if err := m.AddKey("bob", "  "+laptopKey+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AddKey("bob", strings.Replace(laptopKey, "bob@laptop", "other comment", 1)); err == nil {
+		t.Fatal("duplicate key accepted")
+	}
+	if b, _ := os.ReadFile(ak); string(b) != deskKey+"\n"+laptopKey+"\n" {
+		t.Fatalf("authorized_keys = %q", b)
+	}
+	if fi, _ := os.Stat(ak); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("authorized_keys mode %v", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(filepath.Dir(ak)); fi.Mode().Perm() != 0o700 {
+		t.Fatalf(".ssh mode %v", fi.Mode().Perm())
+	}
+	if !strings.Contains(strings.Join(h.calls, "\n"), "restorecon -R "+filepath.Dir(ak)) {
+		t.Fatalf("no restorecon on SELinux: %q", h.calls)
+	}
+}
+
+// Anything that is not one public key line is refused before install, and
+// the error never echoes what was pasted.
+func TestAddKeyRefusesNonPublicKeys(t *testing.T) {
+	for _, bad := range []string{
+		"",
+		"hello world",
+		"-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
+		"ssh-rsa AAAAC3NzaC1lZDI1NTE5AAAAIMqUmlD6QmJuWwhjzyNUY8yQ4d4sEujQ+Z4U4gWaFOPI", // blob is ed25519
+		"ssh-ed25519 not-base64!!",
+		laptopKey + "\n" + deskKey,
+	} {
+		h := newFakeHost(t)
+		h.addUser("bob", os.Getuid())
+		m := newManager(h, "debian")
+		err := m.AddKey("bob", bad)
+		if err == nil {
+			t.Fatalf("%q accepted", bad)
+		}
+		if f := strings.Fields(bad); len(f) > 1 && strings.Contains(err.Error(), f[1]) {
+			t.Fatalf("error echoes the input: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(h.root, "home/bob/.ssh/authorized_keys")); err == nil {
+			t.Fatalf("%q installed", bad)
 		}
 	}
 }
