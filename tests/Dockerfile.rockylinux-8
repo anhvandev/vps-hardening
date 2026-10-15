@@ -1,4 +1,4 @@
-# systemd container for vps-hardening tests. Rocky 8: OpenSSH 8.0 keyword probe.
+# systemd container for vpsctl tests. Rocky 8: OpenSSH 8.0 keyword probe.
 FROM rockylinux:8
 RUN dnf install -y systemd openssh-server openssh-clients sudo iproute && \
     dnf clean all

@@ -1,4 +1,4 @@
-# systemd container for vps-hardening tests. Debian 13: force SOCKET mode.
+# systemd container for vpsctl tests. Debian 13: force SOCKET mode.
 FROM debian:13
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && \

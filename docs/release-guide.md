@@ -1,34 +1,38 @@
 # Release & Tagging Guide
 
-How a new version of `vps-hardening` reaches users. The one-liner in
-`README.md` pins a tag, so the tag **is** the release contract: the tarball
-URL and the raw `install.sh` URL both resolve from it.
+How a new `vpsctl` version reaches users. Pushing a `v*` tag runs
+`.github/workflows/release.yml`. It runs `go test ./...` and
+`tests/test-install.sh`, builds static `vpsctl-linux-amd64` and
+`vpsctl-linux-arm64` (`CGO_ENABLED=0`, version set from the tag), and
+publishes them with `sha256sums.txt` to the GitHub release. `install.sh`
+downloads exactly these assets.
 
 ## Versioning
 
-Plain semver tags: `vMAJOR.MINOR.PATCH` (`v1.0.0`, `v1.0.1`, …).
+Semver tags: `vMAJOR.MINOR.PATCH`.
 
-- **PATCH** — fixes that don't change flags or behavior contracts
-  (e.g. installer bug fixes).
-- **MINOR** — new flags, new supported distros, new opt-in behavior.
-- **MAJOR** — removed/renamed flags, changed defaults, dropped distro support.
+- **PATCH**: fixes that don't change flags or behavior.
+- **MINOR**: new flags, new distros, new opt-in behavior.
+- **MAJOR**: removed/renamed flags, changed defaults, dropped distros.
 
 ## Release checklist
 
-1. **Green tests on the exact commit to be tagged:**
+1. **Tests are green on the exact commit you will tag:**
 
    ```bash
-   bash tests/test-static.sh
-   bash tests/test-container.sh          # full matrix, or at minimum:
-   bash tests/test-container.sh ubuntu-24.04 2222   # socket + port path
+   go test ./...
+   bash tests/test-install.sh
+   bash tests/test-container.sh                    # full matrix, or at least:
+   bash tests/test-container.sh ubuntu-24.04 2222  # socket + port change
    ```
 
-2. **Update pinned references if the installer changed.** `install.sh`
-   defaults `VPS_HARDENING_REF` to the tag users should fetch; the README
-   quick-start URLs hardcode it too. Bump both to the tag you are about to
-   create, commit, and include that commit in the release.
+2. **Bump the pinned default tag in `install.sh`.** `VPSCTL_VERSION`
+   defaults to a hardcoded tag (`VERSION=${VPSCTL_VERSION:-vX.Y.Z}` and the
+   usage comment). Set it to the tag you are about to create. Update the
+   one-liner URLs in `README.md` too. Commit this before tagging, so the
+   `install.sh` at the tag downloads its own release.
 
-3. **Commit, tag annotated, push both:**
+3. **Create an annotated tag and push it:**
 
    ```bash
    git push origin main
@@ -36,28 +40,29 @@ Plain semver tags: `vMAJOR.MINOR.PATCH` (`v1.0.0`, `v1.0.1`, …).
    git push origin vX.Y.Z
    ```
 
-4. **E2E-verify the published URLs** (CDN can lag a few minutes on a fresh
-   tag; retry rather than assuming failure):
+   Wait for the `release` workflow to go green.
+
+4. **Check the published release end to end.** The CDN can take a few
+   minutes on a new tag; retry before you assume it failed.
 
    ```bash
-   curl -fsSL "https://github.com/anhvandev/vps-hardening/archive/refs/tags/vX.Y.Z.tar.gz" | tar -tz | head
-   curl -fsSL "https://raw.githubusercontent.com/anhvandev/vps-hardening/vX.Y.Z/install.sh" | bash -n
+   curl -fsSL "https://raw.githubusercontent.com/anhvandev/vpsctl/vX.Y.Z/install.sh" | bash -n
+   curl -fsSL "https://github.com/anhvandev/vpsctl/releases/download/vX.Y.Z/sha256sums.txt"
    ```
 
-   Then one real container run of the README one-liner before announcing.
+   Then run the README one-liner once in a throwaway container or VM
+   before you announce the release.
 
 ## Rules
 
-- **A pushed tag is immutable, forever.** raw.githubusercontent.com caches
-  per-URL for minutes to hours; anyone who fetched the tag during that
-  window runs different code than later fetchers. Never delete-and-recreate
-  or move a published tag. A bad release is superseded by the next tag, not
-  repaired in place.
-- **Never publish a tag pointing at unreleased or failing code** — users
-  pipe this straight into `sudo bash` on production machines.
-- Deleting a published tag
-  (`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z`) is reserved
-  for a release so broken it endangers machines *and* nobody has plausibly
-  consumed it yet. Prefer a superseding patch tag in all other cases.
-- Pre-release tags (`vX.Y.Z-rc1`) are fine for testing the pipeline itself;
-  keep them off the README.
+- **A pushed tag never changes.** raw.githubusercontent.com caches URLs,
+  so people who fetched the old tag would run different code. Never
+  delete and re-create a published tag, and never move it. Fix a bad
+  release with a new patch tag.
+- **Never tag untested or failing code.** Users pipe `install.sh` straight
+  into `sudo bash` on production machines.
+- Delete a published tag only if the release is so broken it endangers
+  machines *and* nobody has likely used it yet. In every other case,
+  publish a new patch tag instead.
+- Pre-release tags (`vX.Y.Z-rc1`) are fine for testing the pipeline. Keep
+  them out of the README.
