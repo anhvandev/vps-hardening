@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/anhvandev/vpsctl/internal/fail2ban"
 	"github.com/anhvandev/vpsctl/internal/firewall"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
@@ -132,19 +134,16 @@ func ruleRows(rules []firewall.Rule) []row {
 }
 
 func fail2banState(r system.Runner) string {
-	res, err := r.Run("fail2ban-client", "status")
+	jails, err := fail2ban.Jails(r)
 	switch {
-	case err != nil:
-		return "not installed"
-	case res.Code != 0:
+	case errors.Is(err, fail2ban.ErrNotRunning):
 		return "inactive"
+	case err != nil:
+		return err.Error()
+	case len(jails) == 0:
+		return "active, no jails"
 	}
-	for _, line := range strings.Split(res.Stdout, "\n") {
-		if _, jails, ok := strings.Cut(line, "Jail list:"); ok && strings.TrimSpace(jails) != "" {
-			return "active, jails: " + strings.TrimSpace(jails)
-		}
-	}
-	return "active, no jails"
+	return "active, jails: " + strings.Join(jails, ", ")
 }
 
 // updateState is: last automatic-update run, pending updates, reboot required.
