@@ -59,9 +59,9 @@ func TestFirewallListsFirewalldRulesWithListeners(t *testing.T) {
 	h := debianHost(t)
 	h.host = system.Host{DistroID: "rocky", Version: "9.4", Family: "rhel"}
 	h.fake.Results = map[string]system.Result{
-		"firewall-cmd --state":                     {Stdout: "running\n"},
-		"firewall-cmd --permanent --list-ports":    {Stdout: "5000-5500/tcp 50-60/udp 53/tcp 8080/tcp\n"},
-		"firewall-cmd --permanent --list-services": {Stdout: "ssh dhcpv6-client\n"},
+		"firewall-cmd --state":                       {Stdout: "running\n"},
+		"firewall-cmd --permanent --list-ports":      {Stdout: "5000-5500/tcp 50-60/udp 53/tcp 8080/tcp\n"},
+		"firewall-cmd --permanent --list-services":   {Stdout: "ssh dhcpv6-client\n"},
 		"firewall-cmd --permanent --list-rich-rules": {Stdout: `rule family="ipv4" source address="10.0.0.0/8" port port="5432" protocol="tcp" accept` + "\n"},
 		"ss -Hltun": ssOut,
 	}
@@ -145,6 +145,19 @@ func closeFirewall(t *testing.T, tm *teatest.TestModel) string {
 	return quitView(t, tm)
 }
 
+// press types keys into screen s, running each resulting command (and the
+// commands its messages return) to completion.
+func press(s tea.Model, keys string) tea.Model {
+	for _, c := range keys {
+		var cmd tea.Cmd
+		s, cmd = s.Update(tea.KeyPressMsg{Code: c, Text: string(c)})
+		for cmd != nil {
+			s, cmd = s.Update(cmd())
+		}
+	}
+	return s
+}
+
 // actionLog is the action log written under h's root ("" if none).
 func actionLog(h *testHost) string {
 	b, _ := os.ReadFile(filepath.Join(h.root, actionlog.LogPath))
@@ -174,6 +187,115 @@ func TestFirewallOpenPort(t *testing.T) {
 		t.Errorf("ran %q", got)
 	}
 	if log := actionLog(h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall open 6000-6100/udp from 10.0.0.0/8: ok") {
+		t.Errorf("action log:\n%s", log)
+	}
+}
+
+func TestFirewallRefusesRemovingSSHPortRule(t *testing.T) {
+	h := debianHost(t)
+	tm := openFirewall(t, h)
+	tm.Type("d") // first row: 22/tcp
+	waitFor(t, tm, "refused: SSH port 22 would no longer be open to anywhere")
+	closeFirewall(t, tm)
+	if got := mutations(h); len(got) != 0 {
+		t.Errorf("ran %q", got)
+	}
+	if log := actionLog(h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall remove 22/tcp: failed: refused") {
+		t.Errorf("action log:\n%s", log)
+	}
+}
+
+// Removing a rule deletes exactly that rule: 80/tcp, 443/tcp and the
+// source-limited rule are each removed alone.
+func TestFirewallRemovesOnlySelectedRule(t *testing.T) {
+	h := debianHost(t)
+	h.fake.Results["ufw show added"] = system.Result{Stdout: "ufw allow 22/tcp\nufw allow 80/tcp\nufw allow 443/tcp\n" +
+		"ufw allow from 10.0.0.0/8 to any port 5432 proto tcp\n"}
+	for _, c := range []string{"ufw delete allow 80/tcp", "ufw delete allow 443/tcp",
+		"ufw delete allow from 10.0.0.0/8 to any port 5432 proto tcp"} {
+		h.fake.Results[c] = system.Result{}
+	}
+	h.fake.Results["sshd -T"] = system.Result{Stdout: "port 22\n"}
+	h.write("/etc/ssh/ssh_host_ed25519_key", "k")
+	s := screens["Firewall"](harden.NewMachine(h.fake, h.host, h.root, io.Discard))
+	s, _ = s.Update(s.Init()())
+	for _, step := range [][2]string{{"jjd", "removed 443/tcp"}, {"jd", "removed 5432/tcp from 10.0.0.0/8"}, {"kkd", "removed 80/tcp"}} {
+		s = press(s, step[0])
+		wantAll(t, ansi.Strip(s.View().Content), step[1])
+	}
+	want := []string{"ufw delete allow 443/tcp", "ufw delete allow from 10.0.0.0/8 to any port 5432 proto tcp", "ufw delete allow 80/tcp"}
+	if got := mutations(h); !slices.Equal(got, want) {
+		t.Errorf("ran %q, want %q", got, want)
+	}
+	if log := actionLog(h); strings.Count(log, ": ok\n") != 3 {
+		t.Errorf("action log:\n%s", log)
+	}
+}
+
+// Bad input is refused inline, before any lock, command or log line.
+func TestFirewallOpenValidatesInput(t *testing.T) {
+	h := debianHost(t)
+	s := screens["Firewall"](harden.NewMachine(h.fake, h.host, h.root, io.Discard))
+	s, _ = s.Update(s.Init()())
+	for in, want := range map[string]string{
+		"0/tcp":                   "invalid port range",
+		"65536/tcp":               "invalid port range",
+		"200-100/tcp":             "invalid port range",
+		"80/icmp":                 "protocol must be tcp or udp",
+		"80":                      "protocol must be tcp or udp",
+		"http/tcp":                "want PORT[-END]/tcp|udp",
+		"80/tcp from nowhere":     "invalid source",
+		"80/tcp from 10.0.0.0/33": "invalid source",
+	} {
+		s = press(s, "a"+in)
+		var cmd tea.Cmd
+		s, cmd = s.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if v := ansi.Strip(s.View().Content); cmd != nil || !strings.Contains(v, want) {
+			t.Errorf("%q: want inline %q, no action:\n%s", in, want, v)
+		}
+		s, _ = s.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	}
+	if got := mutations(h); len(got) != 0 {
+		t.Errorf("ran %q", got)
+	}
+	if log := actionLog(h); log != "" {
+		t.Errorf("action log:\n%s", log)
+	}
+}
+
+// While another session holds the lock, a mutation is refused with its
+// holder and nothing runs; the rules are still listed.
+func TestFirewallLockBusy(t *testing.T) {
+	h := debianHost(t)
+	h.write("/run/.keep", "")
+	lk, err := actionlog.Lock(filepath.Join(h.root, actionlog.LockPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lk.Close()
+	tm := openFirewall(t, h)
+	tm.Type("jd")
+	waitFor(t, tm, "locked by ")
+	v := closeFirewall(t, tm)
+	wantAll(t, v, "(pid ", "80", "5432")
+	if got := mutations(h); len(got) != 0 {
+		t.Errorf("ran %q", got)
+	}
+	if log := actionLog(h); log != "" {
+		t.Errorf("action log:\n%s", log)
+	}
+}
+
+// A mutation the firewall rejects is shown inline and logged as failed.
+func TestFirewallFailedOpenIsLogged(t *testing.T) {
+	h := debianHost(t)
+	h.fake.Results["ufw allow 8080/tcp"] = system.Result{Code: 1, Stderr: "ERROR: boom"}
+	tm := openFirewall(t, h)
+	tm.Type("a8080/tcp")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "ERROR: boom")
+	closeFirewall(t, tm)
+	if log := actionLog(h); strings.Count(log, "\n") != 1 || !strings.Contains(log, "firewall open 8080/tcp: failed: ") {
 		t.Errorf("action log:\n%s", log)
 	}
 }
