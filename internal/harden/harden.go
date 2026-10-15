@@ -100,62 +100,8 @@ func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, erro
 		return err
 	}
 
-	var fw firewall.Backend
-	if o.SkipFirewall {
-		warn("--skip-firewall: firewall not managed")
-	} else {
-		cur, err := h.CurrentPort()
-		if err != nil {
-			return err
-		}
-		info("ensuring firewall (allowing current SSH port %d first)", cur)
-		if fw, err = h.EnsureFirewall(cur); err != nil {
-			return err
-		}
-		if fw == nil {
-			warn("no managed firewall for this distro: skipping")
-		}
-	}
-
-	c, p, err := h.BeginSSH(fw, o.Port, o.User)
+	p, err := ChangeSSH(o, h, out, ask)
 	if err != nil {
-		return err
-	}
-	info("SSH port: %d (was %d)", p.Port, p.OldPort)
-	restore := func(err error) error {
-		if rerr := c.Restore(); rerr != nil {
-			return fmt.Errorf("%w; restore also failed: %w", err, rerr)
-		}
-		return fmt.Errorf("%w (restored pre-run SSH state)", err)
-	}
-
-	if p.StageBLive && p.Port == p.OldPort {
-		info("already hardened and port unchanged: skipping Stage A and the Verify Gate")
-	} else {
-		info("Stage A: SSH on port %d, password auth still on", p.Port)
-		if err := c.StageA(); err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "\n== VERIFY GATE ==\nFrom your local machine, in a NEW terminal (keep this session open!):\n"+
-			"  ssh -i <saved-key> -p %d %s@<this-host>\nThen confirm sudo works:  sudo true\n\n", p.Port, o.User)
-		if o.Yes {
-			warn("--yes: skipping the Verify Gate prompt (pre-lock assertions still run)")
-		} else {
-			ok, err := ask("Did the NEW login work?")
-			if err != nil {
-				return restore(fmt.Errorf("verify gate: %w (use --yes for automation)", err))
-			}
-			if !ok {
-				return restore(ErrStopped)
-			}
-		}
-	}
-
-	if err := h.PreLockAssertions(o.User); err != nil {
-		return restore(fmt.Errorf("pre-lock assertion failed: %w", err))
-	}
-	info("Stage B: disabling password and root login")
-	if err := c.StageB(); err != nil {
 		return err
 	}
 
@@ -185,4 +131,74 @@ func Run(o Options, h Host, out io.Writer, ask func(question string) (bool, erro
 		"  password auth, root login: disabled\n  default cloud users: locked\nLost the key? Re-run with --rotate-key.\n",
 		o.User, p.Port)
 	return nil
+}
+
+// ChangeSSH is Hardening's SSH part, also run alone by the TUI to change the
+// port: firewall (current SSH port allowed first), Stage A, the Verify Gate,
+// pre-lock assertions for o.User, Stage B. Any failure after the first
+// mutation restores the snapshot; ErrStopped when the operator stops at the
+// gate. o.Port 0 keeps the current port.
+func ChangeSSH(o Options, h Host, out io.Writer, ask func(question string) (bool, error)) (Plan, error) {
+	info := func(f string, a ...any) { fmt.Fprintf(out, "[*] "+f+"\n", a...) }
+	warn := func(f string, a ...any) { fmt.Fprintf(out, "[!] "+f+"\n", a...) }
+
+	var fw firewall.Backend
+	if o.SkipFirewall {
+		warn("--skip-firewall: firewall not managed")
+	} else {
+		cur, err := h.CurrentPort()
+		if err != nil {
+			return Plan{}, err
+		}
+		info("ensuring firewall (allowing current SSH port %d first)", cur)
+		if fw, err = h.EnsureFirewall(cur); err != nil {
+			return Plan{}, err
+		}
+		if fw == nil {
+			warn("no managed firewall for this distro: skipping")
+		}
+	}
+
+	c, p, err := h.BeginSSH(fw, o.Port, o.User)
+	if err != nil {
+		return p, err
+	}
+	info("SSH port: %d (was %d)", p.Port, p.OldPort)
+	restore := func(err error) error {
+		if rerr := c.Restore(); rerr != nil {
+			return fmt.Errorf("%w; restore also failed: %w", err, rerr)
+		}
+		return fmt.Errorf("%w (restored pre-run SSH state)", err)
+	}
+
+	if p.StageBLive && p.Port == p.OldPort {
+		info("already hardened and port unchanged: skipping Stage A and the Verify Gate")
+	} else {
+		info("Stage A: SSH on port %d, password auth still on", p.Port)
+		if err := c.StageA(); err != nil {
+			return p, err
+		}
+		fmt.Fprintf(out, "\n== VERIFY GATE ==\nFrom your local machine, in a NEW terminal (keep this session open!):\n"+
+			"  ssh -i <saved-key> -p %d %s@<this-host>\nThen confirm sudo works:  sudo true\n\n", p.Port, o.User)
+		if o.Yes {
+			warn("--yes: skipping the Verify Gate prompt (pre-lock assertions still run)")
+		} else {
+			ok, err := ask("Did the NEW login work?")
+			if err != nil {
+				return p, restore(fmt.Errorf("verify gate: %w (use --yes for automation)", err))
+			}
+			if !ok {
+				return p, restore(ErrStopped)
+			}
+		}
+	}
+
+	if err := h.PreLockAssertions(o.User); err != nil {
+		return p, restore(fmt.Errorf("pre-lock assertion failed: %w", err))
+	}
+	info("Stage B: disabling password and root login")
+	if err := c.StageB(); err != nil {
+		return p, err
+	}
+	return p, nil
 }
