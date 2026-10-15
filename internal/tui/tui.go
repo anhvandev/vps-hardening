@@ -35,6 +35,10 @@ type backMsg struct{}
 // Back is the command a screen returns to give focus back to the menu.
 func Back() tea.Msg { return backMsg{} }
 
+// NewVersionMsg tells the shell a newer release exists (its tag); the shell
+// shows a notice and never updates on its own.
+type NewVersionMsg string
+
 var (
 	bannerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("1")).Padding(0, 1)
 	titleStyle  = lipgloss.NewStyle().Bold(true)
@@ -50,6 +54,7 @@ type Model struct {
 	screen   tea.Model // open screen, nil if none
 	focused  bool      // keys go to screen, not the menu
 	hardened bool
+	newer    NewVersionMsg // newer release tag, "" if none known
 }
 
 // New opens the TUI on the Overview, with the menu focused.
@@ -64,6 +69,9 @@ func (t Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case backMsg:
 		t.focused = false
 		t.hardened = t.m.SSH.StageBLive()
+		return t, nil
+	case NewVersionMsg:
+		t.newer = msg
 		return t, nil
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
@@ -154,6 +162,9 @@ func (t Model) View() tea.View {
 		help = "esc back · ctrl+c quit"
 	}
 	b.WriteString(dimStyle.Render(help))
+	if t.newer != "" {
+		b.WriteString("\n" + dimStyle.Render("vpsctl "+string(t.newer)+" available: run `sudo vpsctl self-update`"))
+	}
 
 	v := tea.NewView(b.String())
 	v.AltScreen = true

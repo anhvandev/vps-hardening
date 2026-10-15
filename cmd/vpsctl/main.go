@@ -64,7 +64,14 @@ func runTUI() int {
 		return 1
 	}
 	m := harden.NewMachine(system.Exec{}, h, "", io.Discard)
-	if _, err := tea.NewProgram(tui.New(m)).Run(); err != nil {
+	p := tea.NewProgram(tui.New(m))
+	go func() { // non-blocking; offline or any failure stays silent
+		// ponytail: "newer" means "not the latest tag", no semver ordering; add it if pre-releases ship.
+		if tag, err := release.Latest(release.BaseURL); err == nil && tag != version {
+			p.Send(tui.NewVersionMsg(tag))
+		}
+	}()
+	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR:", err)
 		return 1
 	}
