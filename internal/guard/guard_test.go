@@ -88,6 +88,8 @@ func TestProtectedUnits(t *testing.T) {
 		{"cloud-final.service", "stop", true},
 		{"fail2ban.service", "stop", false},
 		{"fail2ban", "start", false},
+		{"fail2ban.service", "edit", true},
+		{"fail2ban", "delete", true},
 		{"nginx.service", "stop", false},
 		{"nginx.service", "disable", false},
 	} {

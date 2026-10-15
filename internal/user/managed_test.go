@@ -49,6 +49,17 @@ func TestCreateUserRefusesBadAndExistingNames(t *testing.T) {
 	}
 }
 
+// An invalid name is refused without echoing it: it may be a pasted secret.
+func TestInvalidNameErrorNeverEchoesInput(t *testing.T) {
+	h := newFakeHost(t)
+	m := newManager(h, "debian")
+	for _, err := range []error{m.CreateUser("SECRET+/="), m.Lock("SECRET+/=")} {
+		if err == nil || strings.Contains(err.Error(), "SECRET") {
+			t.Errorf("err = %v", err)
+		}
+	}
+}
+
 const (
 	laptopKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMqUmlD6QmJuWwhjzyNUY8yQ4d4sEujQ+Z4U4gWaFOPI bob@laptop"
 	deskKey   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOiYRgOygAvBxXou9+czedWaVm66qdGEpPASTuWPmPjp bob@desk"

@@ -159,8 +159,126 @@ func TestSSHPortChangeStopSafelyRestores(t *testing.T) {
 	if sim.listening != 22 || !slices.Equal(sim.ufw, []string{"ufw allow 22/tcp", "ufw allow 80/tcp"}) || string(after) != string(before) {
 		t.Errorf("listening %d, rules %q, drop-in %q", sim.listening, sim.ufw, after)
 	}
-	if log := actionLog(t, h); !strings.Contains(log, "ssh port 2222: failed: stopped at the Verify Gate") {
+	if log := actionLog(t, h); !strings.Contains(log, "ssh port 2222: stopped\n") {
 		t.Errorf("action log:\n%s", log)
+	}
+}
+
+// On a host that is not hardened (Stage B not live) the port change would
+// apply Stage B without the rest of Hardening: it is refused.
+func TestSSHPortChangeRefusedWhenNotHardened(t *testing.T) {
+	h, sim := portChangeHost(t)
+	h.write("/etc/ssh/sshd_config.d/00-vpsctl.conf", "# Managed by vpsctl - do not edit by hand.\nPort 22\n")
+	tm := changePort(t, h, sim, "2222")
+	waitFor(t, tm, "SSH is not hardened yet")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+	if sim.listening != 22 || len(sim.ufw) != 2 || h.actionLog() != "" {
+		t.Errorf("listening %d, rules %q, action log %q", sim.listening, sim.ufw, h.actionLog())
+	}
+}
+
+// Root on the provider console has no SUDO_USER: the port change asks for the
+// login user to try at the Verify Gate, defaulting to the first usable Admin
+// User (carol has no key, alice does).
+func TestSSHPortChangeWithoutSudoUserAsksLoginUser(t *testing.T) {
+	h, sim := portChangeHost(t)
+	t.Setenv("SUDO_USER", "")
+	h.fake.Results["getent passwd"] = system.Result{Stdout: "carol:x:1000:1000::/home/carol:/bin/bash\nalice:x:1001:1001::/home/alice:/bin/bash\n"}
+	h.fake.Results["getent group"] = system.Result{Stdout: "sudo:x:27:carol,alice\n"}
+	h.fake.Results["getent shadow"] = system.Result{Stdout: "carol:!:19000:0:99999:7:::\nalice:!:19000:0:99999:7:::\n"}
+	h.write("/etc/sudoers.d/99-vpsctl-carol", "carol ALL=(ALL:ALL) NOPASSWD: ALL\n")
+	h.write("/etc/sudoers.d/99-vpsctl-alice", "alice ALL=(ALL:ALL) NOPASSWD: ALL\n")
+	tm := changePort(t, h, sim, "2222")
+	waitFor(t, tm, "Login user for the Verify Gate: alice")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "ssh -p 2222 alice@10.0.0.2")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter}) // Stop safely
+	waitFor(t, tm, "restored pre-run SSH state")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+}
+
+// A login user that is not a Managed User is refused before anything runs.
+func TestSSHPortChangeLoginUserMustBeManaged(t *testing.T) {
+	h, sim := portChangeHost(t)
+	t.Setenv("SUDO_USER", "")
+	tm := changePort(t, h, sim, "2222")
+	waitFor(t, tm, "Login user for the Verify Gate")
+	for range 10 {
+		tm.Send(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	tm.Type("mallory")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "not a Managed User")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+	if h.actionLog() != "" {
+		t.Errorf("action log %q", h.actionLog())
+	}
+}
+
+var ctrlC = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+
+// ctrl+c at the Verify Gate is "Stop safely": the change is restored and the
+// TUI stays open.
+func TestCtrlCAtVerifyGateStopsSafely(t *testing.T) {
+	h, sim := portChangeHost(t)
+	tm := changePort(t, h, sim, "2222")
+	waitFor(t, tm, "Stop safely")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyLeft}) // "Login works" selected
+	tm.Send(ctrlC)
+	waitFor(t, tm, "restored pre-run SSH state")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+	if sim.listening != 22 || !slices.Equal(sim.ufw, []string{"ufw allow 22/tcp", "ufw allow 80/tcp"}) {
+		t.Errorf("listening %d, rules %q", sim.listening, sim.ufw)
+	}
+}
+
+// blockOn holds the command line cmd until release is closed.
+type blockOn struct {
+	system.Runner
+	cmd     string
+	release chan struct{}
+}
+
+func (b blockOn) Run(name string, args ...string) (system.Result, error) {
+	if strings.Join(append([]string{name}, args...), " ") == b.cmd {
+		<-b.release
+	}
+	return b.Runner.Run(name, args...)
+}
+
+// ctrl+c while a gated job runs (before the gate) does not quit: the TUI
+// says it is busy and the job carries on to the Verify Gate.
+func TestCtrlCWhileChangeRunsIsIgnored(t *testing.T) {
+	h, sim := portChangeHost(t)
+	r := blockOn{sim, "ss -Hltun", make(chan struct{})}
+	tm := teatest.NewTestModel(t, New(harden.NewMachine(r, h.host, h.root, io.Discard)), teatest.WithInitialTermSize(120, 40))
+	waitFor(t, tm, "RAM")
+	tm.Type("jjj")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "Active sessions")
+	tm.Type("p2222")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "changing the SSH port")
+	tm.Send(ctrlC)
+	waitFor(t, tm, "busy")
+	close(r.release)
+	waitFor(t, tm, "Stop safely")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	waitFor(t, tm, "restored pre-run SSH state")
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEscape})
+	waitFor(t, tm, "q quit")
+	quitView(t, tm)
+	if sim.listening != 22 {
+		t.Errorf("listening %d", sim.listening)
 	}
 }
 

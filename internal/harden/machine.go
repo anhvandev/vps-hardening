@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/anhvandev/vpsctl/internal/fail2ban"
 	"github.com/anhvandev/vpsctl/internal/firewall"
 	"github.com/anhvandev/vpsctl/internal/sshd"
 	"github.com/anhvandev/vpsctl/internal/system"
@@ -116,7 +117,9 @@ func (m *Machine) Fail2ban(sshPort int) error {
 	if m.Host.Family != "debian" || !m.ok("systemctl", "is-enabled", "--quiet", "rsyslog.service") {
 		jail += "backend = systemd\n"
 	}
-	if err := m.writeFile("/etc/fail2ban/jail.d/00-vpsctl.local", jail); err != nil {
+	// Keep ignore-list entries added since (TUI fail2ban screen).
+	jail = fail2ban.WithIgnore(jail, fail2ban.Ignore(m.Root)...)
+	if err := m.writeFile(fail2ban.DropIn, jail); err != nil {
 		return err
 	}
 	if _, err := m.output("systemctl", "enable", "fail2ban"); err != nil {

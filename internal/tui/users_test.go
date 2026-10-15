@@ -118,6 +118,23 @@ func TestUsersCreateKeyOnlyUser(t *testing.T) {
 	}
 }
 
+// A secret pasted into the name field never reaches the action log: a
+// multi-line paste is refused, an invalid name is logged without echoing it.
+func TestUsersCreateNeverLogsAnInvalidName(t *testing.T) {
+	h, tm, _ := usersScreen(t, nil)
+	tm.Type("c")
+	waitFor(t, tm, "New user name")
+	tm.Send(tea.PasteMsg{Content: "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRETKEYMATERIAL\n"})
+	waitFor(t, tm, "paste one line")
+	tm.Send(tea.PasteMsg{Content: "SECRETKEYMATERIAL+/="})
+	enter(tm)
+	waitFor(t, tm, "invalid user name")
+	ctrlCView(t, tm)
+	if al := actionLog(t, h); strings.Contains(al, "SECRET") || !strings.HasSuffix(al, "users create: failed: invalid user name\n") {
+		t.Errorf("action log:\n%s", al)
+	}
+}
+
 const pastedKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMqUmlD6QmJuWwhjzyNUY8yQ4d4sEujQ+Z4U4gWaFOPI alice@laptop"
 
 // A pasted public key is checked, then installed once; the key is never logged.

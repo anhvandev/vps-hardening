@@ -137,7 +137,7 @@ func (fl field) value(s string) (int, error) {
 	return n, nil
 }
 
-// isEntry: a job line starts with its minute field or an @ shortcut;
+// isEntry: a Cron Entry starts with its minute field or an @ shortcut;
 // comments start with # and environment lines with a name.
 func isEntry(line string) bool {
 	t := strings.TrimSpace(line)

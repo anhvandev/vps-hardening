@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -10,6 +9,7 @@ import (
 
 	"github.com/anhvandev/vpsctl/internal/guard"
 	"github.com/anhvandev/vpsctl/internal/harden"
+	"github.com/anhvandev/vpsctl/internal/system"
 	"github.com/anhvandev/vpsctl/internal/user"
 )
 
@@ -32,8 +32,10 @@ type users struct {
 }
 
 // usersAsk is a one-line question; enter hands the trimmed answer to do.
+// oneLine refuses a multi-line paste outright.
 type usersAsk struct {
 	label, input string
+	oneLine      bool
 	do           func(u users, answer string) (users, tea.Cmd)
 }
 
@@ -46,6 +48,8 @@ type usersMsg struct {
 func newUsers(m *harden.Machine) tea.Model { return users{m: m} }
 
 func (u users) Init() tea.Cmd { return u.load("") }
+
+func (u users) busy() bool { return u.job != "" }
 
 // load re-reads the Managed Users, then shows status.
 func (u users) load(status string) tea.Cmd {
@@ -65,7 +69,11 @@ func (u users) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		u.job = ""
 		return u, u.load(outcome(done, msg.err))
 	case tea.PasteMsg:
-		if u.ask.do != nil {
+		switch {
+		case u.ask.do == nil:
+		case u.ask.oneLine && strings.ContainsAny(strings.TrimSpace(msg.Content), "\r\n"):
+			u.status = "ERROR: paste one line only"
+		default:
 			u.ask.input += msg.Content
 		}
 	case tea.KeyPressMsg:
@@ -90,7 +98,10 @@ func (u users) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "down", "j":
 		u.cursor = min(u.cursor+1, max(len(u.list)-1, 0))
 	case "c":
-		u.ask = usersAsk{label: "New user name", do: func(u users, name string) (users, tea.Cmd) {
+		u.ask = usersAsk{label: "New user name", oneLine: true, do: func(u users, name string) (users, tea.Cmd) {
+			if !user.ValidName(name) { // the input may be a pasted secret: keep it out of the log
+				return u, u.mutate("users create", "", func() error { return user.ErrInvalidName })
+			}
 			return u, u.mutate("users create "+name, "created "+name, func() error { return u.m.CreateUser(name) })
 		}}
 	case "a":
@@ -115,7 +126,7 @@ func (u users) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "s":
 		switch {
-		case ok && u.list[u.cursor].Sudo:
+		case ok && u.list[u.cursor].NoPasswd:
 			return u, u.guarded("revoke-sudo", sel, "revoked sudo from "+sel, func() error { return u.m.RevokeSudo(sel) })
 		case ok:
 			return u, u.guarded("grant-sudo", sel, "granted sudo to "+sel, func() error { return u.m.GrantSudo(sel) })
@@ -180,7 +191,7 @@ func (u users) guarded(verb, name, done string, do func() error) tea.Cmd {
 		if err != nil {
 			return err
 		}
-		if err := guard.Check(guard.Facts{SessionUser: os.Getenv("SUDO_USER"), Users: list}, guard.UserAction{User: name, Verb: verb}); err != nil {
+		if err := guard.Check(guard.Facts{SessionUser: system.SessionUser(), Users: list}, guard.UserAction{User: name, Verb: verb}); err != nil {
 			return err
 		}
 		return do()
@@ -193,9 +204,7 @@ func (u users) askKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		u.ask = usersAsk{}
 	case "backspace":
-		if r := []rune(u.ask.input); len(r) > 0 {
-			u.ask.input = string(r[:len(r)-1])
-		}
+		u.ask.input = dropLast(u.ask.input)
 	case "enter":
 		ask := u.ask
 		u.ask = usersAsk{}
@@ -241,7 +250,7 @@ func (u users) View() tea.View {
 		b.WriteString("no Managed Users")
 	default:
 		fmt.Fprintf(&b, "  %-12s %-5s %-5s %s", "NAME", "SUDO", "KEYS", "LOCKED")
-		me := os.Getenv("SUDO_USER")
+		me := system.SessionUser()
 		for i, mu := range u.list {
 			cur := "  "
 			if i == u.cursor {

@@ -128,6 +128,9 @@ func (g verifyGate) Update(msg tea.KeyPressMsg) (verifyGate, tea.Cmd) {
 	switch msg.String() {
 	case "left", "right", "tab", "h", "l":
 		g.works = !g.works
+	case "ctrl+c": // quitting here means Stop safely
+		g.works = false
+		fallthrough
 	case "enter":
 		return g, func() tea.Msg {
 			g.msg.ask <- g.works

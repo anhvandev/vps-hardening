@@ -86,7 +86,7 @@ func publicKeyLine(s string) (string, error) {
 // managed looks name up and refuses anything but an existing Managed User.
 func (m *Manager) managed(name string) (PasswdEntry, error) {
 	if !validName.MatchString(name) {
-		return PasswdEntry{}, fmt.Errorf("invalid user name %q", name)
+		return PasswdEntry{}, ErrInvalidName
 	}
 	pw, exists, err := m.Lookup(name)
 	if err != nil {

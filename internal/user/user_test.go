@@ -408,7 +408,7 @@ func TestManagedUsersListsHumansWithSudoKeysAndLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []ManagedUser{
-		{Name: "alice", UID: 1000, Home: "/home/alice", Sudo: true, Keys: 2},
+		{Name: "alice", UID: 1000, Home: "/home/alice", Sudo: true, NoPasswd: true, Keys: 2},
 		{Name: "bob", UID: 1001, Home: "/home/bob", Sudo: true, Keys: 1},
 		{Name: "ubuntu", UID: 1002, Home: "/home/ubuntu", Sudo: true, Locked: true},
 		{Name: "carol", UID: 1003, Home: "/home/carol", Locked: true},

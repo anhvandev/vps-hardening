@@ -12,13 +12,19 @@ import (
 
 // ManagedUser is one human login as the Users screen shows it.
 type ManagedUser struct {
-	Name   string
-	UID    int
-	Home   string
-	Sudo   bool // vpsctl's per-user NOPASSWD rule or admin-group membership
-	Keys   int  // keys in authorized_keys
-	Locked bool // password locked, account expired or nologin shell
+	Name     string
+	UID      int
+	Home     string
+	Sudo     bool // vpsctl's per-user NOPASSWD rule or admin-group membership
+	NoPasswd bool // vpsctl's per-user NOPASSWD rule: the only sudo a key-only user can use
+	Keys     int  // keys in authorized_keys
+	Locked   bool // password locked, account expired or nologin shell
 }
+
+// Usable: u is an Admin User the operator can log in as and escalate with
+// (passwordless sudo + key + unlocked). Admin-group sudo alone asks for a
+// password a key-only user doesn't have.
+func (u ManagedUser) Usable() bool { return u.NoPasswd && u.Keys > 0 && !u.Locked }
 
 // ManagedUsers lists the human accounts (1000 ≤ UID < 65534) in passwd order,
 // read live from the passwd, group and shadow databases.
@@ -59,13 +65,15 @@ func (m *Manager) ManagedUsers() ([]ManagedUser, error) {
 		}
 		name := f[0]
 		_, rule := os.Stat(filepath.Join(m.Root, "/etc/sudoers.d", "99-vpsctl-"+name))
+		group := f[3] == adminGID || slices.Contains(admins, name)
 		users = append(users, ManagedUser{
-			Name:   name,
-			UID:    uid,
-			Home:   f[5],
-			Sudo:   rule == nil || f[3] == adminGID || slices.Contains(admins, name),
-			Keys:   len(m.keyLines(f[5])),
-			Locked: noLogin(f[6]) || locked(shadowOf[name]),
+			Name:     name,
+			UID:      uid,
+			Home:     f[5],
+			Sudo:     rule == nil || group,
+			NoPasswd: rule == nil,
+			Keys:     len(m.keyLines(f[5])),
+			Locked:   noLogin(f[6]) || locked(shadowOf[name]),
 		})
 	}
 	return users, nil

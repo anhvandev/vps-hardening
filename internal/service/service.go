@@ -74,6 +74,14 @@ func Do(r system.Runner, verb, unit string) error {
 	return err
 }
 
+// EnableStart enables, then starts unit (a newly created Service or Timer).
+func EnableStart(r system.Runner, unit string) error {
+	if err := Do(r, "enable", unit); err != nil {
+		return err
+	}
+	return Do(r, "start", unit)
+}
+
 // Journal reads the last n journal lines of unit, never the whole history.
 func Journal(r system.Runner, unit string, n int) ([]string, error) {
 	out, err := run(r, "journalctl", "-u", unit, "-n", strconv.Itoa(n), "--no-pager")

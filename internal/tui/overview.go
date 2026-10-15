@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/anhvandev/vpsctl/internal/fail2ban"
 	"github.com/anhvandev/vpsctl/internal/firewall"
 	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/system"
@@ -78,35 +80,6 @@ func firewallRows(m *harden.Machine) []row {
 	return rows
 }
 
-// firewallRules reads the firewall state ("active", "inactive", "not
-// installed", "not managed on this distro") and its Firewall Rules; err is
-// set whenever the rules could not be listed. ufw lists its rules while
-// inactive; a stopped firewalld cannot.
-func firewallRules(m *harden.Machine) (state string, rules []firewall.Rule, err error) {
-	var res system.Result
-	var active bool
-	switch m.Host.Family {
-	case "debian":
-		res, err = m.R.Run("ufw", "status")
-		active = res.Code == 0 && strings.Contains(res.Stdout, "Status: active")
-	case "rhel":
-		res, err = m.R.Run("firewall-cmd", "--state")
-		active = res.Code == 0
-	default:
-		return "not managed on this distro", nil, firewall.ErrNoBackend
-	}
-	if err != nil {
-		return "not installed", nil, err
-	}
-	state = "inactive"
-	if active {
-		state = "active"
-	}
-	fw, _ := firewall.New(m.Host, m.R, m.Pkgs)
-	rules, err = fw.List()
-	return state, rules, err
-}
-
 func ruleRows(rules []firewall.Rule) []row {
 	if len(rules) == 0 {
 		return []row{{"", "  no rules"}}
@@ -132,19 +105,16 @@ func ruleRows(rules []firewall.Rule) []row {
 }
 
 func fail2banState(r system.Runner) string {
-	res, err := r.Run("fail2ban-client", "status")
+	jails, err := fail2ban.Jails(r)
 	switch {
-	case err != nil:
-		return "not installed"
-	case res.Code != 0:
+	case errors.Is(err, fail2ban.ErrNotRunning):
 		return "inactive"
+	case err != nil:
+		return err.Error()
+	case len(jails) == 0:
+		return "active, no jails"
 	}
-	for _, line := range strings.Split(res.Stdout, "\n") {
-		if _, jails, ok := strings.Cut(line, "Jail list:"); ok && strings.TrimSpace(jails) != "" {
-			return "active, jails: " + strings.TrimSpace(jails)
-		}
-	}
-	return "active, no jails"
+	return "active, jails: " + strings.Join(jails, ", ")
 }
 
 // updateState is: last automatic-update run, pending updates, reboot required.

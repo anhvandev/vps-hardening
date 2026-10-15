@@ -11,6 +11,7 @@ import (
 
 	"github.com/anhvandev/vpsctl/internal/actionlog"
 	"github.com/anhvandev/vpsctl/internal/guard"
+	"github.com/anhvandev/vpsctl/internal/harden"
 	"github.com/anhvandev/vpsctl/internal/service"
 )
 
@@ -27,12 +28,13 @@ type unitEdit struct {
 	create     bool   // path is a new unit: applied with service.Create
 }
 
-// editedMsg is the editor exiting; appliedMsg is the edit's apply finishing.
+// editedMsg is the editor exiting; appliedMsg is the edit's apply finishing,
+// with the screen's units re-read (its reload message).
 type (
 	editedMsg  struct{ err error }
 	appliedMsg struct {
-		servicesMsg
-		ok bool
+		reloaded tea.Msg
+		ok       bool
 	}
 )
 
@@ -65,6 +67,8 @@ func newUnitEdit(root, unit, path, template string) (*unitEdit, error) {
 // open hands the terminal to $EDITOR (nano if unset) on the temp copy.
 func (e *unitEdit) open() tea.Cmd {
 	args := strings.Fields(cmp.Or(os.Getenv("EDITOR"), "nano"))
+	// The one deliberate exception to the system.Runner seam: the editor is
+	// interactive and needs the real TTY, which only tea.ExecProcess hands over.
 	c := exec.Command(args[0], append(args[1:], e.tmp)...)
 	return tea.ExecProcess(c, func(err error) tea.Msg { return editedMsg{err} })
 }
@@ -75,109 +79,99 @@ func (e *unitEdit) close() {
 	e.lock.Close()
 }
 
-// editUpdate runs the override edit/revert keys and messages; ok is false for
-// anything else.
-func (s servicesScreen) editUpdate(msg tea.Msg) (_ servicesScreen, _ tea.Cmd, ok bool) {
-	switch msg := msg.(type) {
-	case editedMsg:
-		content, err := os.ReadFile(s.edit.tmp)
-		switch {
-		case msg.err != nil || err != nil:
-			s.status = "editor failed: " + cmp.Or(msg.err, err).Error()
-		case string(content) == s.edit.orig && !s.edit.create:
-			s.status = "no changes to " + s.edit.unit
-		default:
-			return s, s.applyEdit(content), true
-		}
-		s.edit.close()
-		s.edit = nil
-		return s, nil, true
-	case appliedMsg:
-		s.list, s.err, s.status = msg.list, msg.err, msg.status
-		if msg.ok {
-			if s.edit.create {
-				s.form, s.offer = nil, s.edit.unit
-				s = s.selectUnit(s.edit.unit)
-			}
-			s.edit.close()
-			s.edit = nil
-		} else {
-			s.edit.failed = true
-		}
-		return s, nil, true
-	case tea.KeyPressMsg:
-		if s.filtering {
-			return s, nil, false
-		}
-		if s.edit != nil && s.edit.failed {
-			switch msg.String() {
-			case "enter":
-				return s, s.edit.open(), true
-			case "esc":
-				s.edit.close()
-				s.status, s.edit = "discarded edit of "+s.edit.unit, nil
-				return s, nil, true
-			}
-		}
-		if s.form != nil || s.offer != "" {
-			return s, nil, false
-		}
-		if msg.String() == "E" && s.cursor < len(s.shown()) {
-			unit := s.shown()[s.cursor].Name
-			if err := guard.Check(guard.Facts{}, guard.UnitAction{Unit: unit, Verb: "edit"}); err != nil {
-				s.status = err.Error()
-				return s, nil, true
-			}
-			e, err := newUnitEdit(s.m.Root, unit, service.OverridePath(s.m.Root, unit),
-				"# Override for "+unit+": settings here replace the vendor unit's.\n[Service]\n")
-			if err != nil {
-				s.status = err.Error()
-				return s, nil, true
-			}
-			s.edit = e
-			return s, e.open(), true
-		}
-		if msg.String() == "U" && s.cursor < len(s.shown()) {
-			return s, s.revert(s.shown()[s.cursor].Name), true
-		}
-	}
-	return s, nil, false
+// overrideFlow is the override edit (E, in $EDITOR via unitEdit) and revert
+// (U) flow shared by the Services and Timers screens.
+type overrideFlow struct {
+	m        *harden.Machine
+	kind     string                      // "service" or "timer": the action-log label
+	template string                      // a new override's body, after its header comment
+	reload   func(status string) tea.Cmd // the screen's re-read of its units
 }
 
-// revert removes unit's override under logMutation, then re-reads the Services.
-func (s servicesScreen) revert(unit string) tea.Cmd {
+// update runs the flow on the screen's edit in progress (*edit, nil if none)
+// and status: the editor exiting, re-edit (enter) / discard (esc) after a
+// failed apply, and E / U on unit ("" when none is selected or a form has the
+// keys). ok is false for anything else. appliedMsg stays with the screen.
+func (f overrideFlow) update(edit **unitEdit, status *string, msg tea.Msg, unit string) (_ tea.Cmd, ok bool) {
+	e := *edit
+	switch msg := msg.(type) {
+	case editedMsg:
+		content, err := os.ReadFile(e.tmp)
+		switch {
+		case msg.err != nil || err != nil:
+			*status = "editor failed: " + cmp.Or(msg.err, err).Error()
+		case string(content) == e.orig && !e.create:
+			*status = "no changes to " + e.unit
+		default:
+			return f.apply(e, content), true
+		}
+		e.close()
+		*edit = nil
+		return nil, true
+	case tea.KeyPressMsg:
+		if e != nil && e.failed {
+			switch msg.String() {
+			case "enter":
+				return e.open(), true
+			case "esc":
+				e.close()
+				*status, *edit = "discarded edit of "+e.unit, nil
+				return nil, true
+			}
+		}
+		switch {
+		case unit == "":
+		case msg.String() == "E":
+			if err := guard.Check(guard.Facts{}, guard.UnitAction{Unit: unit, Verb: "edit"}); err != nil {
+				*status = err.Error()
+				return nil, true
+			}
+			e, err := newUnitEdit(f.m.Root, unit, service.OverridePath(f.m.Root, unit),
+				"# Override for "+unit+": settings here replace the vendor unit's.\n"+f.template)
+			if err != nil {
+				*status = err.Error()
+				return nil, true
+			}
+			*edit = e
+			return e.open(), true
+		case msg.String() == "U":
+			return f.revert(unit), true
+		}
+	}
+	return nil, false
+}
+
+// revert removes unit's override under logMutation, then re-reads the units.
+func (f overrideFlow) revert(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := logMutation(s.m.Root, "service revert "+unit, func() error {
-			return service.Revert(s.m.R, s.m.Root, unit)
+		err := logMutation(f.m.Root, f.kind+" revert "+unit, func() error {
+			return service.Revert(f.m.R, f.m.Root, unit)
 		})
-		list, lerr := service.List(s.m.R)
 		status := "reverted " + unit + " override, systemd reloaded"
 		if err != nil {
 			status = err.Error()
 		}
-		return servicesMsg{list, lerr, status}
+		return f.reload(status)()
 	}
 }
 
-// applyEdit applies content as the edit's file, or creates it as a new unit,
-// (under the edit's lock) and logs the result, then re-reads the Services.
-func (s servicesScreen) applyEdit(content []byte) tea.Cmd {
-	e := s.edit
+// apply applies content as e's file, or creates it as a new unit, (under the
+// edit's lock) and logs the result, then re-reads the units.
+func (f overrideFlow) apply(e *unitEdit, content []byte) tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		status := "override for " + e.unit + " applied, systemd reloaded"
 		if e.create {
-			err = service.Create(s.m.R, s.m.Root, e.unit, content)
-			appendLog(s.m.Root, "service create "+e.unit, err)
+			err = service.Create(f.m.R, f.m.Root, e.unit, content)
+			appendLog(f.m.Root, f.kind+" create "+e.unit, err)
 			status = "created " + e.unit + ", verified and loaded"
 		} else {
-			err = service.Apply(s.m.R, e.path, e.unit, content)
-			appendLog(s.m.Root, "service edit "+e.unit, err)
+			err = service.Apply(f.m.R, e.path, e.unit, content)
+			appendLog(f.m.Root, f.kind+" edit "+e.unit, err)
 		}
-		list, lerr := service.List(s.m.R)
 		if err != nil {
 			status = err.Error() + "\nnothing applied · enter re-edit · esc discard"
 		}
-		return appliedMsg{servicesMsg{list, lerr, status}, err == nil}
+		return appliedMsg{f.reload(status)(), err == nil}
 	}
 }

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"strings"
@@ -16,7 +17,7 @@ func init() { screens["Timers"] = newTimers }
 
 // timersScreen lists Timers read live, with their next run and target Service.
 // n opens the new-Timer form (created, enabled and started on enter); E edits
-// the selected Timer's override in $EDITOR, U reverts it (timers_edit.go).
+// the selected Timer's override in $EDITOR, U reverts it (unit_edit.go).
 type timersScreen struct {
 	m      *harden.Machine
 	loaded bool
@@ -89,6 +90,37 @@ func (s timersScreen) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return s, nil
 }
 
+// editUpdate runs the override edit/revert flow (unit_edit.go); ok is false
+// for anything else.
+func (s timersScreen) editUpdate(msg tea.Msg) (_ timersScreen, _ tea.Cmd, ok bool) {
+	switch msg := msg.(type) {
+	case appliedMsg:
+		r, ok := msg.reloaded.(timersMsg)
+		if !ok || s.edit == nil {
+			return s, nil, false
+		}
+		s.list, s.err, s.status = r.list, r.err, r.status
+		if msg.ok {
+			s.edit.close()
+			s.edit = nil
+		} else {
+			s.edit.failed = true
+		}
+		return s, nil, true
+	case tea.KeyPressMsg:
+		if s.form != nil {
+			return s, nil, false
+		}
+	}
+	unit := ""
+	if s.cursor < len(s.list) {
+		unit = s.list[s.cursor].Name
+	}
+	flow := overrideFlow{s.m, "timer", "# An empty OnCalendar= first clears the vendor schedule.\n[Timer]\n", s.reload}
+	cmd, ok := flow.update(&s.edit, &s.status, msg, unit)
+	return s, cmd, ok
+}
+
 func (s timersScreen) formKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -98,9 +130,7 @@ func (s timersScreen) formKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "up":
 		s.field = (s.field + len(s.form) - 1) % len(s.form)
 	case "backspace":
-		if r := []rune(s.form[s.field]); len(r) > 0 {
-			s.form[s.field] = string(r[:len(r)-1])
-		}
+		s.form[s.field] = dropLast(s.form[s.field])
 	case "enter":
 		return s, s.create(service.TimerSpec{Name: s.form[0], Schedule: s.form[1], Service: s.form[2]})
 	default:
@@ -122,18 +152,13 @@ func (s timersScreen) create(spec service.TimerSpec) tea.Cmd {
 		err = logMutation(root, "timer create "+unit, func() error { return service.Create(r, root, unit, content) })
 		created := err == nil
 		if created {
-			err = logMutation(root, "timer enable+start "+unit, func() error {
-				if err := service.Do(r, "enable", unit); err != nil {
-					return err
-				}
-				return service.Do(r, "start", unit)
-			})
+			err = logMutation(root, "timer enable+start "+unit, func() error { return service.EnableStart(r, unit) })
 		}
 		list, lerr := service.ListTimers(r)
 		status := "created " + unit + ", next run "
 		for _, t := range list {
 			if t.Name == unit {
-				status += or(t.Next, "none")
+				status += cmp.Or(t.Next, "none")
 			}
 		}
 		if err != nil {
@@ -173,7 +198,7 @@ func (s timersScreen) View() tea.View {
 		tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "Timer\tNext run\tService")
 		for _, t := range s.list {
-			fmt.Fprintf(tw, "%s\t%s\t%s\n", t.Name, or(t.Next, "-"), or(t.Service, "-"))
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", t.Name, cmp.Or(t.Next, "-"), cmp.Or(t.Service, "-"))
 		}
 		tw.Flush()
 		lines := strings.Split(table.String(), "\n")

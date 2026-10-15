@@ -3,6 +3,7 @@
 package user
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -40,6 +41,12 @@ type Manager struct {
 
 var validName = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
+// ErrInvalidName never echoes the name: it may be a pasted secret.
+var ErrInvalidName = errors.New("invalid user name")
+
+// ValidName reports whether useradd would accept name.
+func ValidName(name string) bool { return validName.MatchString(name) }
+
 // EnsureAdmin creates name if missing (key-only, no password), adds it to the
 // admin group and grants per-user NOPASSWD sudo. Idempotent.
 func (m *Manager) EnsureAdmin(name string) error {
@@ -74,7 +81,7 @@ func (m *Manager) checkName(what, name string) (pw PasswdEntry, exists bool, err
 		return pw, false, fmt.Errorf("refusing %s %q: root or a Default Cloud User that Hardening locks", what, name)
 	}
 	if !validName.MatchString(name) {
-		return pw, false, fmt.Errorf("invalid user name %q", name)
+		return pw, false, ErrInvalidName
 	}
 	return m.Lookup(name)
 }

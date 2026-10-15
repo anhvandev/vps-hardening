@@ -49,6 +49,8 @@ func newHardening(m *harden.Machine) tea.Model {
 
 func (h hardening) Init() tea.Cmd { return nil }
 
+func (h hardening) busy() bool { return h.running }
+
 func (h hardening) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case gateMsg:
@@ -101,9 +103,7 @@ func (h hardening) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			f.on = !f.on
 		}
 	case k == "backspace":
-		if r := []rune(f.value); len(r) > 0 {
-			f.value = string(r[:len(r)-1])
-		}
+		f.value = dropLast(f.value)
 	default:
 		f.value += msg.Text
 	}
