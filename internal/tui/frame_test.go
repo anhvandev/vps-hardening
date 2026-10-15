@@ -98,9 +98,9 @@ func finalView(t *testing.T, tm *teatest.TestModel) string {
 func TestNarrowFrame(t *testing.T) {
 	tm := startSized(sizedHost(t), 90, 30)
 	waitFor(t, tm, "5432/tcp")
-	tm.Type("j") // Overview → Task History, still SYSTEM
+	tm.Type("j") // Overview → Disk, still SYSTEM
 	v := finalView(t, tm)
-	wantAll(t, v, "SYSTEM  Overview · Task History", "tab menu", "5432/tcp")
+	wantAll(t, v, "SYSTEM  Overview · Disk · Task History", "tab menu", "5432/tcp")
 	if strings.Contains(v, "WORKLOADS") {
 		t.Errorf("full sidebar shown on a narrow terminal:\n%s", v)
 	}
