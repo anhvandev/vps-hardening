@@ -409,10 +409,10 @@ func TestManagedUsersListsHumansWithSudoKeysAndLock(t *testing.T) {
 	}
 	want := []ManagedUser{
 		{Name: "alice", UID: 1000, Home: "/home/alice", Sudo: true, Keys: 2},
-		{Name: "bob", UID: 1001, Home: "/home/bob", Sudo: true, Keys: 1},
-		{Name: "ubuntu", UID: 1002, Home: "/home/ubuntu", Sudo: true, Locked: true},
+		{Name: "bob", UID: 1001, Home: "/home/bob", Sudo: true, AdminGroup: true, Keys: 1},
+		{Name: "ubuntu", UID: 1002, Home: "/home/ubuntu", Sudo: true, AdminGroup: true, Locked: true},
 		{Name: "carol", UID: 1003, Home: "/home/carol", Locked: true},
-		{Name: "dave", UID: 1004, Home: "/home/dave", Sudo: true},
+		{Name: "dave", UID: 1004, Home: "/home/dave", Sudo: true, AdminGroup: true},
 		{Name: "erin", UID: 1005, Home: "/home/erin", Locked: true},
 	}
 	if !slices.Equal(got, want) {
