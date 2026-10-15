@@ -67,8 +67,23 @@ func (o overview) View() tea.View {
 
 // firewallRows is the firewall state followed by one row per Firewall Rule.
 func firewallRows(m *harden.Machine) []row {
+	state, rules, err := firewallRules(m)
+	rows := []row{{"Firewall", state}}
+	switch {
+	case err == nil:
+		rows = append(rows, ruleRows(rules)...)
+	case state == "active":
+		rows = append(rows, row{"", "  rules unreadable: " + err.Error()})
+	}
+	return rows
+}
+
+// firewallRules reads the firewall state ("active", "inactive", "not
+// installed", "not managed on this distro") and its Firewall Rules; err is
+// set whenever the rules could not be listed. ufw lists its rules while
+// inactive; a stopped firewalld cannot.
+func firewallRules(m *harden.Machine) (state string, rules []firewall.Rule, err error) {
 	var res system.Result
-	var err error
 	var active bool
 	switch m.Host.Family {
 	case "debian":
@@ -78,26 +93,18 @@ func firewallRows(m *harden.Machine) []row {
 		res, err = m.R.Run("firewall-cmd", "--state")
 		active = res.Code == 0
 	default:
-		return []row{{"Firewall", "not managed on this distro"}}
+		return "not managed on this distro", nil, firewall.ErrNoBackend
 	}
-	switch {
-	case err != nil:
-		return []row{{"Firewall", "not installed"}}
-	case !active:
-		// ufw still lists its rules while inactive; firewalld cannot.
-		rows := []row{{"Firewall", "inactive"}}
-		fw, _ := firewall.New(m.Host, m.R, m.Pkgs)
-		if rules, err := fw.List(); err == nil {
-			rows = append(rows, ruleRows(rules)...)
-		}
-		return rows
+	if err != nil {
+		return "not installed", nil, err
+	}
+	state = "inactive"
+	if active {
+		state = "active"
 	}
 	fw, _ := firewall.New(m.Host, m.R, m.Pkgs)
-	rules, err := fw.List()
-	if err != nil {
-		return []row{{"Firewall", "active"}, {"", "  rules unreadable: " + err.Error()}}
-	}
-	return append([]row{{"Firewall", "active"}}, ruleRows(rules)...)
+	rules, err = fw.List()
+	return state, rules, err
 }
 
 func ruleRows(rules []firewall.Rule) []row {
